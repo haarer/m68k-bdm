@@ -56,7 +56,8 @@ bool bdm_send_preamble(void)
     bdm_set_bdd_input();
 
     sei();
-    return true;
+
+    return (BDMACK_PIN & (1 << BDMACK_BIT)) != 0;
 }
 
 bool bdm_shift_byte(uint8_t out, uint8_t *in)
@@ -103,7 +104,8 @@ bool bdm_read_memory(uint32_t addr, uint8_t *data, uint8_t size)
     (void)data;
     (void)size;
 
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_READ_MEM, NULL);
 
@@ -122,7 +124,8 @@ bool bdm_write_memory(uint32_t addr, const uint8_t *data, uint8_t size)
     (void)data;
     (void)size;
 
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_WRITE_MEM, NULL);
 
@@ -138,7 +141,8 @@ bool bdm_read_register(uint8_t reg, uint32_t *value)
     (void)reg;
     (void)value;
 
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_READ_REG, NULL);
 
@@ -150,7 +154,8 @@ bool bdm_write_register(uint8_t reg, uint32_t value)
     (void)reg;
     (void)value;
 
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_WRITE_REG, NULL);
 
@@ -159,7 +164,8 @@ bool bdm_write_register(uint8_t reg, uint32_t value)
 
 bool bdm_target_reset(void)
 {
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_TARGET_RST, NULL);
 
@@ -172,7 +178,8 @@ bool bdm_target_reset(void)
 
 bool bdm_target_halt(void)
 {
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_TARGET_HALT, NULL);
 
@@ -181,7 +188,8 @@ bool bdm_target_halt(void)
 
 bool bdm_target_go(void)
 {
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_TARGET_GO, NULL);
 
@@ -190,7 +198,8 @@ bool bdm_target_go(void)
 
 bool bdm_step(void)
 {
-    bdm_send_preamble();
+    if (!bdm_send_preamble())
+        return false;
 
     bdm_shift_byte(BDM_CMD_STEP, NULL);
 

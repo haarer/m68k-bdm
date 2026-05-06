@@ -75,4 +75,16 @@ disasm: $(TARGET).elf
 
 upload: flash
 
-.PHONY: all clean flash eeprom fuse size disasm upload
+VENV     := venv
+PYTHON   := $(VENV)/bin/python3
+
+$(VENV)/bin/python3:
+	python3 -m venv $(VENV)
+
+test-deps: $(VENV)/bin/python3
+	@uv pip install --python $(PYTHON) --quiet pyserial
+
+test: test-deps
+	$(PYTHON) tests/test_bdm_bridge.py
+
+.PHONY: all clean flash eeprom fuse size disasm upload test test-deps

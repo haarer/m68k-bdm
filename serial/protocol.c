@@ -52,6 +52,9 @@ bool protocol_parse_command(uint8_t byte, protocol_command_t *cmd)
     case PARSE_STATE_CS:
         if (byte != cs_expected) {
             parse_state = PARSE_STATE_WAIT_STX;
+            if (byte == PROTOCOL_STX) {
+                parse_state = PARSE_STATE_CMD;
+            }
             return false;
         }
         parse_state = PARSE_STATE_ETX;
@@ -64,6 +67,9 @@ bool protocol_parse_command(uint8_t byte, protocol_command_t *cmd)
             return true;
         }
         parse_state = PARSE_STATE_WAIT_STX;
+        if (byte == PROTOCOL_STX) {
+            parse_state = PARSE_STATE_CMD;
+        }
         return false;
 
     default:

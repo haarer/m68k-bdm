@@ -16,7 +16,7 @@
 /* ------------------------------------------------------------------ */
 
 #define SERIAL_BAUD       115200UL
-#define SERIAL_UBRR_VALUE ((F_CPU / 16 / SERIAL_BAUD - 1) / 1)
+#define SERIAL_UBRR_VALUE (F_CPU / (8 * SERIAL_BAUD) - 1)
 
 /* ------------------------------------------------------------------ */
 /*  BDM Pins (Target side - ATmega2560 port mapping)                   */
@@ -65,18 +65,18 @@
 /*  Commands                                                           */
 /* ------------------------------------------------------------------ */
 
-#define CMD_MEM_READ       0x01
-#define CMD_MEM_WRITE      0x02
-#define CMD_REG_READ       0x03
-#define CMD_REG_WRITE      0x04
-#define CMD_TARGET_RESET   0x05
-#define CMD_TARGET_HALT    0x06
-#define CMD_TARGET_GO      0x07
-#define CMD_STEP           0x08
-#define CMD_BREAKPOINT_SET 0x09
-#define CMD_BREAKPOINT_CLR 0x0A
-#define CMD_STATUS         0x0B
-#define CMD_CONFIG         0x0C
+#define CMD_MEM_READ       0x10
+#define CMD_MEM_WRITE      0x11
+#define CMD_REG_READ       0x12
+#define CMD_REG_WRITE      0x13
+#define CMD_TARGET_RESET   0x14
+#define CMD_TARGET_HALT    0x15
+#define CMD_TARGET_GO      0x16
+#define CMD_STEP           0x17
+#define CMD_BREAKPOINT_SET 0x18
+#define CMD_BREAKPOINT_CLR 0x19
+#define CMD_STATUS         0x1A
+#define CMD_CONFIG         0x1B
 
 /* ------------------------------------------------------------------ */
 /*  Responses                                                          */

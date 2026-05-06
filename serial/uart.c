@@ -9,7 +9,7 @@ static ringbuf_t rx_buf;
 
 void uart_init(uint16_t ubrr)
 {
-    UCSR0A = 0;
+    UCSR0A = (1 << U2X0);
 
     UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
 

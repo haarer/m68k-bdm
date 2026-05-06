@@ -9,9 +9,8 @@ This project implements a hardware debug bridge that connects a GNU toolchain on
 ```
 ┌──────────────┐        Serial (UART)        ┌──────────────┐        BDM Bus      ┌──────────────┐
 │  Linux Host  │ ◄────────────────────────►  │  AVR Bridge  │ ◄────────────────►  │  MC68331     │
-│              │  CLI / GDB serial protocol  │  Firmware    │  BDM protocol       │  (Target)    │
-│  GDB Client  │                             │              │                     │              │
-│  Toolchain   │                             │              │                     │              │
+│              │  Custom command protocol    │  Firmware    │  BDM protocol       │  (Target)    │
+│  Host Tool   │                             │              │                     │              │
 └──────────────┘                             └──────────────┘                     └──────────────┘
 ```
 
@@ -22,8 +21,8 @@ This project implements a hardware debug bridge that connects a GNU toolchain on
 The firmware running on the AVR microcontroller performs the following functions:
 
 - **Serial Interface (Host Side)**
-  - UART communication with the Linux host PC
-  - Parses commands from the host (GDB serial protocol or custom CLI)
+  - UART communication with the Linux host PC (USART0)
+  - Parses commands from the host using a custom command-response protocol
   - Returns responses, memory dumps, register states, and status information
   - Configurable baud rate (default 115200 bps)
 
@@ -34,26 +33,14 @@ The firmware running on the AVR microcontroller performs the following functions
   - Supports synchronous BDM communication with proper timing
 
 - **Command Processing**
-  - Translates host commands into BDM bus transactions
+  - Translates host commands into BDM bus transactions in `main.c`
   - Assembles and disassembles BDM frames with proper bit-banging
   - Handles acknowledgment, error detection, and retry logic
 
-### 2. Host-Side Software (Linux)
-
-- **GDB Stub / Server**
-  - Implements the GDB Remote Serial Protocol (RSP)
-  - Translates GDB commands to bridge commands over serial
-  - Enables use of standard `m68k-elf-gdb` for debugging
-
-- **CLI Utility**
-  - Standalone command-line tool for basic target inspection
-  - Memory read/write, register inspection, reset control
-  - Useful for quick diagnostics without full GDB session
-
-### 3. Hardware
+### 2. Hardware
 
 - **AVR Microcontroller**
-  - Target AVR: [to be specified, e.g., ATmega328P, ATmega2560]
+  - Target AVR: ATmega2560 (Arduino Mega 2560)
   - Requires sufficient I/O pins for BDM signals and UART
   - Requires adequate flash for firmware and SRAM for buffers
 
@@ -108,70 +95,102 @@ Response format: [STX][RSP][LEN][PAYLOAD...][CHECKSUM][ETX]
 ### Command Set
 | Code | Command         | Description                        |
 |------|-----------------|------------------------------------|
-| 0x01 | MEM_READ        | Read target memory                 |
-| 0x02 | MEM_WRITE       | Write target memory                |
-| 0x03 | REG_READ        | Read target register               |
-| 0x04 | REG_WRITE       | Write target register              |
-| 0x05 | TARGET_RESET    | Reset target                       |
-| 0x06 | TARGET_HALT     | Halt target execution              |
-| 0x07 | TARGET_GO       | Resume target execution            |
-| 0x08 | STEP            | Single-step target                 |
-| 0x09 | BREAKPOINT_SET  | Set hardware breakpoint            |
-| 0x0A | BREAKPOINT_CLR  | Clear hardware breakpoint          |
-| 0x0B | STATUS          | Query bridge and target status     |
-| 0x0C | CONFIG          | Configure bridge parameters        |
+| 0x10 | MEM_READ        | Read target memory                 |
+| 0x11 | MEM_WRITE       | Write target memory                |
+| 0x12 | REG_READ        | Read target register               |
+| 0x13 | REG_WRITE       | Write target register              |
+| 0x14 | TARGET_RESET    | Reset target                       |
+| 0x15 | TARGET_HALT     | Halt target execution              |
+| 0x16 | TARGET_GO       | Resume target execution            |
+| 0x17 | STEP            | Single-step target                 |
+| 0x18 | BREAKPOINT_SET  | Set hardware breakpoint            |
+| 0x19 | BREAKPOINT_CLR  | Clear hardware breakpoint          |
+| 0x1A | STATUS          | Query bridge and target status     |
+| 0x1B | CONFIG          | Configure bridge parameters        |
 
-## GDB Integration
+Command codes start at 0x10 to avoid conflicts with protocol delimiters (STX=0x02, ETX=0x03).
 
-The host-side GDB stub translates GDB Remote Serial Protocol packets to bridge commands:
+### Response Codes
+The response code byte has bit 7 (0x80) set to distinguish responses from commands. The lower 7 bits encode the status:
 
-- `m` (memory read) -> MEM_READ
-- `M` (memory write) -> MEM_WRITE
-- `g` (read registers) -> REG_READ (all)
-- `G` (write registers) -> REG_WRITE (all)
-- `c` (continue) -> TARGET_GO
-- `s` (step) -> STEP
-- `Z` (set breakpoint) -> BREAKPOINT_SET
-- `z` (remove breakpoint) -> BREAKPOINT_CLR
-- `?` (query status) -> STATUS
+| Code | Response            | Description                        |
+|------|---------------------|------------------------------------|
+| 0x00 | RSP_OK              | Command succeeded                  |
+| 0x01 | RSP_ERROR           | General error                      |
+| 0x02 | RSP_NOT_SUPPORTED   | Unknown command                    |
+| 0x03 | RSP_TIMEOUT         | Operation timed out                |
+| 0x04 | RSP_TARGET_ERROR    | Target not responding              |
 
-## AVR Firmware Modules
+### Checksum
+XOR checksum covers all bytes from STX through payload (inclusive), excluding the checksum byte itself and ETX.
+
+## Project Structure
 
 ```
-firmware/
-├── main.c              - Entry point, initialization
+.
+├── main.c              - Entry point, command dispatch
+├── config.h            - Board, pin, timing, and protocol configuration
+├── Makefile            - Build system
 ├── bdm_engine/         - BDM protocol implementation
-│   ├── bdm_core.c      - Frame assembly/disassembly
-│   ├── bdm_timing.c    - Signal timing and bit-banging
-│   └── bdm_commands.c  - BDM command handlers
+│   ├── bdm_core.c/h    - Frame assembly/disassembly, BDM state machine
+│   └── bdm_timing.c/h  - Signal timing and bit-banging delays
 ├── serial/             - Host serial interface
-│   ├── uart.c          - UART driver
-│   └── protocol.c      - Command parsing and response
-├── target/             - Target-specific code
-│   ├── mc68331.c       - MC68331 register map and quirks
-│   └── breakpoints.c   - Breakpoint management
+│   ├── uart.c/h        - UART driver (USART0)
+│   └── protocol.c/h    - Command parsing and response formatting
 ├── hal/                - Hardware abstraction
-│   ├── pins.c          - GPIO configuration
-│   └── config.h        - Board-specific defines
-└── utils/              - Common utilities
-    ├── checksum.c      - Checksum algorithms
-    └── ringbuf.c       - Ring buffer for serial I/O
+│   └── pins.c/h        - GPIO configuration for BDM signals
+├── utils/              - Common utilities
+│   ├── checksum.c/h    - XOR checksum algorithms
+│   └── ringbuf.c/h     - Ring buffer for serial I/O
+└── tests/              - Python test suite
+    └── test_bdm_bridge.py
 ```
 
 ## Configuration
 
-### Build Options
-- Target AVR model (via Makefile or CMake)
-- BDM clock frequency (divider-based)
-- Serial baud rate
-- Buffer sizes
-- GDB stub enable/disable
+### Build Configuration (`config.h`)
+- Target AVR model: ATmega2560
+- BDM clock frequency: 500 kHz (configurable via `BDM_CLOCK_KHZ`)
+- Serial baud rate: 115200 (configurable via `SERIAL_BAUD`)
+- Buffer sizes: 256 bytes RX/TX (configurable via `RX_BUFFER_SIZE`/`TX_BUFFER_SIZE`)
 
-### Runtime Configuration
-Bridge accepts CONFIG commands to adjust:
-- BDM clock speed
-- Timeout values
-- Response verbosity
+### Pin Mapping (`config.h`)
+| Signal        | Port | Pin |
+|---------------|------|-----|
+| BDMC (clock)  | A    | 0   |
+| BDD (data)    | A    | 1   |
+| TARGET_RESET  | A    | 2   |
+| BDREQ         | B    | 0   |
+| BDMACK        | B    | 1   |
+
+## Testing
+
+Run the Python test suite against the flashed bridge:
+
+```sh
+make test
+```
+
+The test suite verifies protocol-level behavior (framing, checksums, command responses). Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol tests still pass.
+
+### Test Cases
+
+| Test | Description |
+|------|-------------|
+| `serial_connection` | Serial port opens and bridge responds |
+| `response_format` | Response frames have correct STX/ETX, 0x80 bit set |
+| `status_command` | STATUS command returns RSP_OK |
+| `config_command` | CONFIG command returns RSP_OK |
+| `invalid_command` | Unknown command returns RSP_NOT_SUPPORTED |
+| `bad_checksum_rejected` | Frames with bad checksum are silently dropped |
+| `incomplete_frame` | Bridge recovers after receiving truncated frames |
+| `mem_read_valid_format` | MEM_READ with valid address format elicits response |
+| `mem_read_no_target` | MEM_READ returns RSP_TARGET_ERROR without target |
+| `mem_write_no_target` | MEM_WRITE returns RSP_TARGET_ERROR without target |
+| `reg_read_no_target` | REG_READ returns RSP_TARGET_ERROR without target |
+| `reg_write_no_target` | REG_WRITE returns RSP_TARGET_ERROR without target |
+| `target_reset_no_target` | TARGET_RESET returns RSP_TARGET_ERROR without target |
+| `target_halt_no_target` | TARGET_HALT returns RSP_TARGET_ERROR without target |
 
 ## Development Environment
 
@@ -214,6 +233,18 @@ make flash PORT=/dev/ttyACM0 BAUD=115200
 
 The flash target uses the `-D` flag to skip chip erase, which avoids erase failures on some bootloaders.
 
+### Makefile Targets
+
+| Target     | Description                           |
+|------------|---------------------------------------|
+| all        | Build firmware (hex, eep, size)       |
+| flash      | Flash firmware to AVR                 |
+| eeprom     | Flash EEPROM image                    |
+| fuse       | Set fuse bytes (0xD2/0xFF)           |
+| test       | Run Python test suite                 |
+| disasm     | Generate disassembly listing          |
+| clean      | Remove build artifacts                |
+
 ### Makefile Variables
 
 | Variable | Default       | Description                    |
@@ -245,10 +276,11 @@ make eeprom
 
 ## Known Limitations
 
-- BDM clock speed limited by AVR CPU frequency
-- Number of simultaneous breakpoints limited by target hardware
+- BDM clock speed limited by AVR CPU frequency (16 MHz)
 - No JTAG support (BDM-only)
 - Memory access speed constrained by synchronous BDM protocol
+- Breakpoint support not yet implemented
+- MC68331 target-specific code (register map, quirks) not yet implemented
 
 ## References
 
