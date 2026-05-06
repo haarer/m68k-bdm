@@ -243,20 +243,18 @@ Run the Python test suite against the flashed bridge:
 make test
 ```
 
-The test suite verifies protocol-level behavior (framing, checksums, command responses). Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol tests still pass.
+The test suite sends real frames to the bridge over serial and validates every response. Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol framing, checksums, and response codes are verified end-to-end.
 
-### Test Cases (40 tests)
+### Test Cases (24 tests)
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| Frame Construction | 7 | STX/ETX framing, checksum, payload parsing |
-| Command Codes | 2 | All 16 commands and 5 response codes defined |
-| BDM OpCodes | 4 | Memory, register, control opcodes and size encoding |
-| Protocol Simulation | 10 | Memory R/W, dump/fill, registers, status, BERR |
-| BDM Engine | 7 | Payload construction, size conversion, u32 pack/unpack |
-| Error Handling | 3 | Timeout, target error, not supported responses |
-| BDM Timing | 2 | Clock period, timeout calculations |
-| Edge Cases | 5 | Empty payload, max payload, STX in payload, etc. |
+| Frame Construction | 3 | STX/ETX framing, XOR checksum, payload embedding |
+| Bridge Integration | 21 | All 17 commands exercised over real serial, response codes validated |
+
+**Non-BDM commands** (return `RSP_OK` without target): STATUS, CONFIG, BREAKPOINT_SET, BREAKPOINT_CLR
+**BDM commands** (return `RSP_TARGET_ERROR` without target): MEM_READ, MEM_WRITE, REG_READ, REG_WRITE, SYSREG_READ, SYSREG_WRITE, MEM_DUMP, MEM_FILL, TARGET_RESET, TARGET_HALT, TARGET_GO, STEP, CALL
+**Protocol edge cases**: unknown command returns `RSP_NOT_SUPPORTED`, short payload returns `RSP_ERROR`, rapid-fire commands, response framing validation
 
 ## Development Environment
 

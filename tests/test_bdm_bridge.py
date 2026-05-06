@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-BDM Bridge Protocol Tests
-Tests the host-side protocol for the MC68331 BDM bridge firmware.
+BDM Bridge Integration Tests
+Talks to the flashed AVR bridge over serial and exercises every command.
+Without a 68331 target attached, BDM commands return RSP_TARGET_ERROR,
+but protocol framing, checksums, and response codes are verified.
 """
 
 import struct
-import socket
 import time
 import unittest
-from unittest.mock import Mock, patch, MagicMock
-
+import serial
 
 # ------------------------------------------------------------------
-#  Protocol constants (mirror config.h)
+#  Protocol constants (must match config.h)
 # ------------------------------------------------------------------
 
 STX = 0x02
@@ -36,428 +36,342 @@ CMD_MEM_DUMP       = 0x1E
 CMD_MEM_FILL       = 0x1F
 CMD_CALL           = 0x20
 
+ALL_COMMANDS = [
+    CMD_MEM_READ, CMD_MEM_WRITE, CMD_REG_READ, CMD_REG_WRITE,
+    CMD_TARGET_RESET, CMD_TARGET_HALT, CMD_TARGET_GO, CMD_STEP,
+    CMD_BREAKPOINT_SET, CMD_BREAKPOINT_CLR, CMD_STATUS, CMD_CONFIG,
+    CMD_SYSREG_READ, CMD_SYSREG_WRITE, CMD_MEM_DUMP, CMD_MEM_FILL,
+    CMD_CALL,
+]
+
 RSP_OK            = 0x00
 RSP_ERROR         = 0x01
 RSP_NOT_SUPPORTED = 0x02
 RSP_TIMEOUT       = 0x03
 RSP_TARGET_ERROR  = 0x04
 
+ALL_RSP_CODES = [RSP_OK, RSP_ERROR, RSP_NOT_SUPPORTED, RSP_TIMEOUT, RSP_TARGET_ERROR]
+
+PORT = "/dev/ttyACM0"
+BAUD = 115200
 
 # ------------------------------------------------------------------
-#  Frame builder / parser
+#  Frame builder (matches protocol.c state machine exactly)
 # ------------------------------------------------------------------
 
-def build_frame(cmd, payload=None):
-    """Build a protocol frame: STX + cmd + payload + checksum + ETX"""
-    data = bytes([cmd])
-    if payload:
-        data += payload
-    checksum = 0
+def build_frame(cmd, payload=b""):
+    """Build: [STX][CMD][LEN][PAYLOAD...][XOR_CS][ETX]"""
+    cs = STX ^ cmd ^ len(payload)
+    for b in payload:
+        cs ^= b
+    return bytes([STX, cmd, len(payload)]) + payload + bytes([cs, ETX])
+
+
+def xor_checksum(data):
+    cs = 0
     for b in data:
-        checksum = (checksum + b) & 0xFF
-    return bytes([STX]) + data + bytes([checksum, ETX])
-
-
-def parse_frame(frame):
-    """Parse a protocol frame, return (cmd, payload, checksum_ok)"""
-    if frame[0] != STX:
-        return None, None, False
-    if frame[-1] != ETX:
-        return None, None, False
-    cmd = frame[1]
-    payload = frame[2:-2]
-    data = bytes([cmd]) + payload
-    expected = 0
-    for b in data:
-        expected = (expected + b) & 0xFF
-    return cmd, payload, frame[-2] == expected
+        cs ^= b
+    return cs
 
 
 # ------------------------------------------------------------------
-#  Test: Frame construction
+#  Serial bridge client
+# ------------------------------------------------------------------
+
+class BridgeClient:
+    """Wraps pyserial; sends frames and reads responses from the bridge."""
+
+    def __init__(self, port=PORT, baud=BAUD):
+        self.port = serial.Serial(port, baud, timeout=2, dsrdtr=True)
+        time.sleep(2)  # wait for AVR to boot after DTR reset
+        self.port.flushInput()
+        self.port.flushOutput()
+
+    def close(self):
+        self.port.close()
+
+    def _read_response(self):
+        """Read a full response frame and validate framing + checksum."""
+        raw = bytearray()
+        deadline = time.monotonic() + 2.0
+
+        while time.monotonic() < deadline:
+            ch = self.port.read(1)
+            if not ch:
+                break
+            raw.append(ch[0])
+            if ch[0] == ETX:
+                break
+
+        if len(raw) < 5:
+            return None, None, bytes(raw)
+
+        if raw[0] != STX:
+            return None, None, bytes(raw)
+
+        if not (raw[1] & 0x80):
+            return None, None, bytes(raw)
+
+        rsp_code = raw[1] & 0x7F
+        rsp_len = raw[2]
+        rsp_payload = bytes(raw[3:3 + rsp_len])
+        cs_byte = raw[3 + rsp_len]
+        etx_byte = raw[3 + rsp_len + 1]
+
+        if etx_byte != ETX:
+            return None, None, bytes(raw)
+
+        expected_cs = STX ^ raw[1] ^ raw[2]
+        for b in rsp_payload:
+            expected_cs ^= b
+        if expected_cs != cs_byte:
+            return None, None, bytes(raw)
+
+        return rsp_code, rsp_payload, bytes(raw)
+
+    def send(self, cmd, payload=b""):
+        """Send a command frame, read and validate response.
+        Returns (rsp_code, rsp_payload) or (None, None) on failure."""
+        self.port.flushInput()
+        frame = build_frame(cmd, payload)
+        self.port.write(frame)
+        time.sleep(0.15)
+        return self._read_response()[:2]
+
+    # -- Convenience methods --
+
+    def send_status(self):
+        return self.send(CMD_STATUS)
+
+    def send_config(self):
+        return self.send(CMD_CONFIG)
+
+    def send_mem_read(self, addr, count=1, size=1):
+        payload = struct.pack(">I", addr) + bytes([count, size])
+        return self.send(CMD_MEM_READ, payload)
+
+    def send_mem_write(self, addr, data):
+        payload = struct.pack(">I", addr) + bytes(data)
+        return self.send(CMD_MEM_WRITE, payload)
+
+    def send_reg_read(self, reg):
+        return self.send(CMD_REG_READ, bytes([reg]))
+
+    def send_reg_write(self, reg, value):
+        payload = bytes([reg]) + struct.pack(">I", value)
+        return self.send(CMD_REG_WRITE, payload)
+
+    def send_sysreg_read(self, reg):
+        return self.send(CMD_SYSREG_READ, bytes([reg]))
+
+    def send_sysreg_write(self, reg, value):
+        payload = bytes([reg]) + struct.pack(">I", value)
+        return self.send(CMD_SYSREG_WRITE, payload)
+
+    def send_mem_dump(self, addr, count=4, size=4):
+        payload = struct.pack(">I", addr) + bytes([count, size])
+        return self.send(CMD_MEM_DUMP, payload)
+
+    def send_mem_fill(self, addr, count, value, size=1):
+        payload = (struct.pack(">I", addr) + bytes([count]) +
+                   struct.pack(">I", value) + bytes([size]))
+        return self.send(CMD_MEM_FILL, payload)
+
+    def send_target_reset(self):
+        return self.send(CMD_TARGET_RESET)
+
+    def send_target_halt(self):
+        return self.send(CMD_TARGET_HALT)
+
+    def send_target_go(self):
+        return self.send(CMD_TARGET_GO)
+
+    def send_step(self):
+        return self.send(CMD_STEP)
+
+    def send_call(self, addr):
+        return self.send(CMD_CALL, struct.pack(">I", addr))
+
+    def send_breakpoint_set(self):
+        return self.send(CMD_BREAKPOINT_SET)
+
+    def send_breakpoint_clr(self):
+        return self.send(CMD_BREAKPOINT_CLR)
+
+    def send_unknown(self, cmd=0x7F):
+        return self.send(cmd)
+
+
+# ------------------------------------------------------------------
+#  Unit tests: frame construction (no serial needed)
 # ------------------------------------------------------------------
 
 class TestFrameConstruction(unittest.TestCase):
-    def test_mem_read_frame(self):
-        payload = struct.pack(">I", 0x1000) + bytes([1, 1])  # addr, count, size
+    """Verify frame building matches protocol.c state machine."""
+
+    def test_empty_payload_frame(self):
+        frame = build_frame(CMD_STATUS)
+        self.assertEqual(frame[0], STX)
+        self.assertEqual(frame[1], CMD_STATUS)
+        self.assertEqual(frame[2], 0)
+        self.assertEqual(frame[3], STX ^ CMD_STATUS ^ 0)
+        self.assertEqual(frame[-1], ETX)
+        self.assertEqual(len(frame), 5)
+
+    def test_payload_frame(self):
+        payload = struct.pack(">I", 0x00001000) + bytes([4, 4])
         frame = build_frame(CMD_MEM_READ, payload)
         self.assertEqual(frame[0], STX)
-        self.assertEqual(frame[-1], ETX)
         self.assertEqual(frame[1], CMD_MEM_READ)
+        self.assertEqual(frame[2], len(payload))
+        self.assertEqual(frame[3:3 + len(payload)], payload)
+        self.assertEqual(frame[-1], ETX)
 
-    def test_mem_write_frame(self):
-        payload = struct.pack(">I", 0x1000) + bytes([0xDE, 0xAD])
-        frame = build_frame(CMD_MEM_WRITE, payload)
-        self.assertEqual(frame[1], CMD_MEM_WRITE)
+    def test_xor_checksum_coverage(self):
+        for cmd in ALL_COMMANDS:
+            payload = bytes([cmd, 0xAA, 0x55])
+            frame = build_frame(cmd, payload)
+            cs = STX ^ cmd ^ len(payload)
+            for b in payload:
+                cs ^= b
+            self.assertEqual(frame[-2], cs, f"bad checksum for cmd 0x{cmd:02X}")
 
-    def test_sysreg_read_frame(self):
-        frame = build_frame(CMD_SYSREG_READ, bytes([0x00]))
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_SYSREG_READ)
-        self.assertEqual(payload[0], 0x00)
 
-    def test_mem_dump_frame(self):
-        payload = struct.pack(">I", 0x1000) + bytes([16, 4])
-        frame = build_frame(CMD_MEM_DUMP, payload)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_MEM_DUMP)
-
-    def test_mem_fill_frame(self):
-        payload = struct.pack(">I", 0x1000) + bytes([16]) + struct.pack(">I", 0xDEADBEEF) + bytes([4])
-        frame = build_frame(CMD_MEM_FILL, payload)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_MEM_FILL)
-
-    def test_call_frame(self):
-        payload = struct.pack(">I", 0x2000)
-        frame = build_frame(CMD_CALL, payload)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_CALL)
-        self.assertEqual(struct.unpack(">I", payload)[0], 0x2000)
-
-    def test_checksum_validation(self):
-        frame = build_frame(CMD_STATUS)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-
-    def test_bad_checksum(self):
-        frame = build_frame(CMD_STATUS)
-        bad = frame[:-2] + bytes([0xFF, ETX])
-        cmd, payload, ok = parse_frame(bad)
-        self.assertFalse(ok)
 
 
 # ------------------------------------------------------------------
-#  Test: Command codes
+#  Integration tests: talk to the flashed bridge
 # ------------------------------------------------------------------
 
-class TestCommandCodes(unittest.TestCase):
-    def test_all_commands_defined(self):
-        expected = {
-            CMD_MEM_READ, CMD_MEM_WRITE, CMD_REG_READ, CMD_REG_WRITE,
-            CMD_TARGET_RESET, CMD_TARGET_HALT, CMD_TARGET_GO, CMD_STEP,
-            CMD_BREAKPOINT_SET, CMD_BREAKPOINT_CLR, CMD_STATUS, CMD_CONFIG,
-            CMD_SYSREG_READ, CMD_SYSREG_WRITE, CMD_MEM_DUMP, CMD_MEM_FILL,
-            CMD_CALL
-        }
-        self.assertEqual(len(expected), len(expected))
-        self.assertIn(CMD_MEM_DUMP, expected)
-        self.assertIn(CMD_MEM_FILL, expected)
-        self.assertIn(CMD_SYSREG_READ, expected)
-        self.assertIn(CMD_SYSREG_WRITE, expected)
-        self.assertIn(CMD_CALL, expected)
+class TestBridgeIntegration(unittest.TestCase):
+    """Sends real frames to the bridge and validates responses."""
 
-    def test_response_codes_defined(self):
-        expected = {RSP_OK, RSP_ERROR, RSP_NOT_SUPPORTED, RSP_TIMEOUT, RSP_TARGET_ERROR}
-        self.assertEqual(len(expected), 5)
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.bridge = BridgeClient()
+            cls.available = True
+        except serial.SerialException:
+            cls.available = False
+            cls.bridge = None
 
+    @classmethod
+    def tearDownClass(cls):
+        if cls.available and cls.bridge:
+            cls.bridge.close()
 
-# ------------------------------------------------------------------
-#  Test: BDM opcode constants
-# ------------------------------------------------------------------
-
-class TestBDMOpCodes(unittest.TestCase):
-    def test_memory_opcodes(self):
-        self.assertEqual(0x0B00, 0x0B00)  # READ
-        self.assertEqual(0x0C00, 0x0C00)  # WRITE
-        self.assertEqual(0x0E00, 0x0E00)  # FILL
-        self.assertEqual(0x0F00, 0x0F00)  # DUMP
-
-    def test_register_opcodes(self):
-        self.assertEqual(0x4100, 0x4100)  # WAREG
-        self.assertEqual(0x4200, 0x4200)  # RAREG
-        self.assertEqual(0x2400, 0x2400)  # WSREG
-        self.assertEqual(0x2500, 0x2500)  # RSREG
-
-    def test_control_opcodes(self):
-        self.assertEqual(0x0000, 0x0000)  # NOP
-        self.assertEqual(0x0100, 0x0100)  # RST
-        self.assertEqual(0x0200, 0x0200)  # CALL
-        self.assertEqual(0x0300, 0x0300)  # GO
-
-    def test_size_encoding(self):
-        self.assertEqual(0x0000, 0x0000)  # BYTE
-        self.assertEqual(0x0008, 0x0008)  # WORD
-        self.assertEqual(0x0010, 0x0010)  # LONG
-
-
-# ------------------------------------------------------------------
-#  Test: BDM protocol simulation
-# ------------------------------------------------------------------
-
-class BDMProtocolSimulator:
-    """Simulates the MC68331 BDM protocol for testing."""
-
-    def __init__(self):
-        self.memory = bytearray(0x10000)
-        self.data_regs = [0] * 8
-        self.addr_regs = [0] * 8
-        self.sysregs = {
-            0: 0x0000,  # RPC
-            1: 0x0000,  # PCC
-            2: 0x0000,  # ATEMP
-            3: 0x0000,  # SR
-            4: 0x0000,  # VBR
-            5: 0x0000,  # SFC
-            6: 0x0000,  # DFC
-            7: 0x0000,  # FAR
-        }
-        self.in_bdm_mode = True
-        self.halted = True
-        self.address_ptr = 0
-
-    def send_preamble(self):
-        return self.in_bdm_mode
-
-    def shift_word(self, out):
-        return 0x7FFF if self.halted else 0x0000
-
-    def read_memory(self, addr, size=1):
-        if addr >= 0x10000:
-            return None, "BERR"
-        if size == 4:
-            val = (self.memory[addr] << 24) | (self.memory[addr+1] << 16) | \
-                  (self.memory[addr+2] << 8) | self.memory[addr+3]
-            return val, None
-        elif size == 2:
-            val = (self.memory[addr] << 8) | self.memory[addr+1]
-            return val, None
-        else:
-            return self.memory[addr], None
-
-    def write_memory(self, addr, value, size=1):
-        if addr >= 0x10000:
-            return "BERR"
-        if size == 4:
-            self.memory[addr]   = (value >> 24) & 0xFF
-            self.memory[addr+1] = (value >> 16) & 0xFF
-            self.memory[addr+2] = (value >>  8) & 0xFF
-            self.memory[addr+3] =  value        & 0xFF
-        elif size == 2:
-            self.memory[addr]   = (value >> 8) & 0xFF
-            self.memory[addr+1] =  value       & 0xFF
-        else:
-            self.memory[addr] = value & 0xFF
-        return None
-
-
-class TestBDMProtocolSimulation(unittest.TestCase):
     def setUp(self):
-        self.sim = BDMProtocolSimulator()
+        if not self.available:
+            self.skipTest("serial port not available")
 
-    def test_preamble_success(self):
-        self.assertTrue(self.sim.send_preamble())
+    # -- Non-BDM commands (don't need target) --
 
-    def test_memory_read_write_roundtrip(self):
-        addr = 0x1000
-        value = 0xAB
-        self.sim.write_memory(addr, value)
-        read_val, err = self.sim.read_memory(addr)
-        self.assertIsNone(err)
-        self.assertEqual(read_val, value)
-
-    def test_memory_read_write_word(self):
-        addr = 0x1000
-        value = 0x1234
-        self.sim.write_memory(addr, value, 2)
-        read_val, err = self.sim.read_memory(addr, 2)
-        self.assertIsNone(err)
-        self.assertEqual(read_val, value)
-
-    def test_memory_read_write_long(self):
-        addr = 0x1000
-        value = 0xDEADBEEF
-        self.sim.write_memory(addr, value, 4)
-        read_val, err = self.sim.read_memory(addr, 4)
-        self.assertIsNone(err)
-        self.assertEqual(read_val, value)
-
-    def test_memory_out_of_bounds(self):
-        _, err = self.sim.read_memory(0x10000)
-        self.assertEqual(err, "BERR")
-
-    def test_memory_write_out_of_bounds(self):
-        err = self.sim.write_memory(0x10000, 0xAB)
-        self.assertEqual(err, "BERR")
-
-    def test_dump_fill_roundtrip(self):
-        addr = 0x1000
-        count = 16
-        fill_val = 0x55
-
-        # Fill
-        for i in range(count):
-            self.sim.write_memory(addr + i, fill_val)
-
-        # Dump
-        for i in range(count):
-            read_val, err = self.sim.read_memory(addr + i)
-            self.assertIsNone(err)
-            self.assertEqual(read_val, fill_val)
-
-    def test_register_read_write(self):
-        self.sim.data_regs[0] = 0x12345678
-        self.assertEqual(self.sim.data_regs[0], 0x12345678)
-
-    def test_shift_word_status(self):
-        self.sim.halted = True
-        status = self.sim.shift_word(0)
-        self.assertEqual(status, 0x7FFF)  # OK
-
-    def test_shift_word_error(self):
-        self.sim.halted = False
-        status = self.sim.shift_word(0)
-        self.assertEqual(status, 0x0000)
-
-
-# ------------------------------------------------------------------
-#  Test: BDM engine functions (mocked)
-# ------------------------------------------------------------------
-
-class TestBDMEngine(unittest.TestCase):
-    """Test BDM engine logic with mocked hardware."""
-
-    def test_size_from_byte(self):
-        # Simulates the size_from_byte helper in main.c
-        def size_from_byte(s):
-            if s == 2: return 1  # WORD
-            if s == 4: return 2  # LONG
-            return 0  # BYTE
-
-        self.assertEqual(size_from_byte(1), 0)
-        self.assertEqual(size_from_byte(2), 1)
-        self.assertEqual(size_from_byte(4), 2)
-
-    def test_u32_pack_unpack(self):
-        val = 0xDEADBEEF
-        packed = struct.pack(">I", val)
-        unpacked = struct.unpack(">I", packed)[0]
-        self.assertEqual(val, unpacked)
-
-    def test_payload_constructor(self):
-        # Test that payload for MEM_READ is well-formed
-        addr = 0x1000
-        count = 8
-        size = 4  # LONG
-        payload = struct.pack(">I", addr) + bytes([count, size])
-        self.assertEqual(len(payload), 6)
-        self.assertEqual(struct.unpack(">I", payload[:4])[0], addr)
-        self.assertEqual(payload[4], count)
-        self.assertEqual(payload[5], size)
-
-    def test_sysreg_payload(self):
-        reg = 0x00  # RPC
-        payload = bytes([reg])
+    def test_status_returns_ok(self):
+        code, payload = self.bridge.send_status()
+        self.assertEqual(code, RSP_OK, "STATUS should return RSP_OK")
+        self.assertIsNotNone(payload)
         self.assertEqual(len(payload), 1)
-        self.assertEqual(payload[0], reg)
 
-    def test_call_payload(self):
-        addr = 0x2000
-        payload = struct.pack(">I", addr)
-        self.assertEqual(len(payload), 4)
-        self.assertEqual(struct.unpack(">I", payload)[0], addr)
+    def test_config_returns_ok(self):
+        code, _ = self.bridge.send_config()
+        self.assertEqual(code, RSP_OK, "CONFIG should return RSP_OK")
 
-    def test_fill_payload(self):
-        addr = 0x1000
-        count = 32
-        value = 0xFF
-        size = 1
-        payload = struct.pack(">I", addr) + bytes([count]) + struct.pack(">I", value) + bytes([size])
-        self.assertEqual(len(payload), 10)
+    def test_breakpoint_set_returns_ok(self):
+        code, _ = self.bridge.send_breakpoint_set()
+        self.assertEqual(code, RSP_OK, "BREAKPOINT_SET should return RSP_OK")
 
-    def test_dump_response_parsing(self):
-        # Simulate response from DUMP command
-        count = 4
-        values = [0x00001000, 0x00001001, 0x00001002, 0x00001003]
-        response_data = b""
-        for v in values:
-            response_data += struct.pack(">I", v)
-        self.assertEqual(len(response_data), count * 4)
-        for i, v in enumerate(values):
-            parsed = struct.unpack(">I", response_data[i*4:(i+1)*4])[0]
-            self.assertEqual(parsed, v)
+    def test_breakpoint_clr_returns_ok(self):
+        code, _ = self.bridge.send_breakpoint_clr()
+        self.assertEqual(code, RSP_OK, "BREAKPOINT_CLR should return RSP_OK")
 
+    # -- BDM commands (return TARGET_ERROR without 68331) --
 
-# ------------------------------------------------------------------
-#  Test: Error handling
-# ------------------------------------------------------------------
+    def test_mem_read_returns_target_error(self):
+        code, _ = self.bridge.send_mem_read(0x1000, 1, 1)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-class TestErrorHandling(unittest.TestCase):
-    def test_timeout_response(self):
-        frame = build_frame(CMD_MEM_READ, struct.pack(">I", 0x1000) + bytes([1]))
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_MEM_READ)
+    def test_mem_write_returns_target_error(self):
+        code, _ = self.bridge.send_mem_write(0x1000, [0xAB, 0xCD])
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_target_error_response(self):
-        frame = build_frame(CMD_MEM_WRITE, struct.pack(">I", 0x10000) + bytes([0xFF]))
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, CMD_MEM_WRITE)
+    def test_reg_read_returns_target_error(self):
+        code, _ = self.bridge.send_reg_read(0)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_not_supported_response(self):
-        frame = build_frame(0xFF)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(cmd, 0xFF)
+    def test_reg_write_returns_target_error(self):
+        code, _ = self.bridge.send_reg_write(0, 0x12345678)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
+    def test_sysreg_read_returns_target_error(self):
+        code, _ = self.bridge.send_sysreg_read(0)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-# ------------------------------------------------------------------
-#  Test: BDM timing
-# ------------------------------------------------------------------
+    def test_sysreg_write_returns_target_error(self):
+        code, _ = self.bridge.send_sysreg_write(0, 0x00001000)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-class TestBDMTiming(unittest.TestCase):
-    def test_clock_period(self):
-        # 500 kHz clock = 2 us period, 1 us half-period
-        clock_khz = 500
-        half_period_us = 1000 / clock_khz
-        self.assertEqual(half_period_us, 2.0)
+    def test_mem_dump_returns_target_error(self):
+        code, _ = self.bridge.send_mem_dump(0x1000, 4, 4)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_timeout_ms(self):
-        timeout_ms = 5000
-        timeout_us = timeout_ms * 1000
-        self.assertEqual(timeout_us, 5000000)
+    def test_mem_fill_returns_target_error(self):
+        code, _ = self.bridge.send_mem_fill(0x1000, 16, 0x55, 1)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
+    def test_target_reset_returns_target_error(self):
+        code, _ = self.bridge.send_target_reset()
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-# ------------------------------------------------------------------
-#  Test: Protocol edge cases
-# ------------------------------------------------------------------
+    def test_target_halt_returns_target_error(self):
+        code, _ = self.bridge.send_target_halt()
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-class TestProtocolEdgeCases(unittest.TestCase):
-    def test_empty_payload(self):
-        frame = build_frame(CMD_STATUS)
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(len(payload), 0)
+    def test_target_go_returns_target_error(self):
+        code, _ = self.bridge.send_target_go()
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_max_payload(self):
-        payload = bytes(range(256))
-        frame = build_frame(CMD_MEM_DUMP, payload)
-        cmd, parsed, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(parsed, payload)
+    def test_step_returns_target_error(self):
+        code, _ = self.bridge.send_step()
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_single_byte_payload(self):
-        frame = build_frame(CMD_SYSREG_READ, bytes([0x03]))
-        cmd, payload, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(payload[0], 0x03)
+    def test_call_returns_target_error(self):
+        code, _ = self.bridge.send_call(0x2000)
+        self.assertEqual(code, RSP_TARGET_ERROR)
 
-    def test_frame_with_stx_in_payload(self):
-        payload = bytes([STX, 0x00, 0x01])
-        frame = build_frame(CMD_MEM_WRITE, payload)
-        cmd, parsed, ok = parse_frame(frame)
-        self.assertTrue(ok)
-        self.assertEqual(parsed, payload)
+    # -- Protocol edge cases --
 
+    def test_unknown_command_returns_not_supported(self):
+        code, _ = self.bridge.send_unknown(0x7F)
+        self.assertEqual(code, RSP_NOT_SUPPORTED)
 
-# ------------------------------------------------------------------
-#  Main
-# ------------------------------------------------------------------
+    def test_response_framing_valid(self):
+        """Every response has valid STX, 0x80 bit, XOR checksum, ETX."""
+        self.bridge.port.flushInput()
+        self.bridge.port.write(build_frame(CMD_STATUS))
+        time.sleep(0.15)
+        code, payload, raw = self.bridge._read_response()
+        self.assertIsNotNone(code, "no response received")
+        self.assertLess(code, 0x80, "response code should not have 0x80 bit set")
+        self.assertEqual(raw[0], STX)
+        self.assertTrue(raw[1] & 0x80)
+        self.assertEqual(raw[-1], ETX)
+
+    def test_rapid_commands(self):
+        """Send 10 STATUS commands in a row; each should return OK."""
+        for _ in range(10):
+            code, _ = self.bridge.send_status()
+            self.assertEqual(code, RSP_OK, "rapid STATUS should return RSP_OK")
+
+    def test_mem_read_short_payload(self):
+        """MEM_READ with too-short payload should return RSP_ERROR."""
+        self.bridge.port.flushInput()
+        payload = struct.pack(">I", 0x1000)  # missing count and size bytes
+        frame = build_frame(CMD_MEM_READ, payload)
+        self.bridge.port.write(frame)
+        time.sleep(0.15)
+        code, _, _ = self.bridge._read_response()
+        self.assertEqual(code, RSP_ERROR)
+
 
 if __name__ == "__main__":
     unittest.main()
