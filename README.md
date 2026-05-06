@@ -186,7 +186,56 @@ Bridge accepts CONFIG commands to adjust:
   - avr-ld 2.46.0 (GNU Binutils)
 - **Build System**: Make
 - **Target MCU**: ATmega2560 (Arduino Mega 2560)
-- **Programming**: avrdude via ISP programmer
+
+## Flashing
+
+### Prerequisites
+
+Install avrdude:
+```sh
+# Alpine Linux
+apk add avrdude
+
+# Debian/Ubuntu
+apt install avrdude
+```
+
+### Using Makefile
+
+The Makefile provides a `flash` target:
+```sh
+make flash PREFIX=/dev/ttyACM0
+```
+
+Note: The default programmer is `arduino` which may not work with all bootloaders. If flashing fails, use the manual method below.
+
+### Manual Flashing
+
+Use avrdude with the `wiring` programmer (STK500 v2 protocol):
+```sh
+avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -U flash:w:bdm_bridge.hex:i
+```
+
+If chip erase fails, skip it with the `-D` flag:
+```sh
+avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -D -U flash:w:bdm_bridge.hex:i
+```
+
+### Verify Device Connection
+
+Check if the Arduino is detected:
+```sh
+avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -v
+```
+
+Expected output includes: `Device signature = 1E 98 01 (ATmega2560)`
+
+### EEPROM (Optional)
+
+To flash the EEPROM image:
+```sh
+avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -U eeprom:w:bdm_bridge.eep:i
+```
 
 ### Host Toolchain (Target Development)
 
