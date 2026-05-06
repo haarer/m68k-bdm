@@ -175,10 +175,22 @@ Bridge accepts CONFIG commands to adjust:
 
 ## Development Environment
 
-- **Cross Compiler**: avr-gcc (AVR Toolchain)
-- **Build System**: Make or CMake
+### AVR Toolchain (Bridge Firmware)
+
+- **Source**: [haarer/toolchain68k gcc152](https://github.com/haarer/toolchain68k/releases/tag/gcc152)
+- **Package**: `toolchain-avr-alpine-gcc-15.2.0.tar.gz`
+- **Install Path**: `/opt` (binaries in `/opt/bin/`, libs in `/opt/lib/`, AVR libs in `/opt/avr/lib/`)
+- **Components**:
+  - avr-gcc 15.2.0
+  - avr-gdb 17.1
+  - avr-ld 2.46.0 (GNU Binutils)
+- **Build System**: Make
+- **Target MCU**: ATmega2560 (Arduino Mega 2560)
 - **Programming**: avrdude via ISP programmer
-- **Host Toolchain**: m68k-elf-gcc, m68k-elf-gdb
+
+### Host Toolchain (Target Development)
+
+- m68k-elf-gcc, m68k-elf-gdb (GNU toolchain for Motorola CPU32)
 - **OS**: Linux (host side)
 
 ## Known Limitations
