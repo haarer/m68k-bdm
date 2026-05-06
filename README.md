@@ -82,6 +82,65 @@ Each BDM transaction consists of:
 - Go/continue execution
 - Halt target
 
+## BDM Command Specification
+
+The CPU32 BDM protocol defines 12 commands, each encoded as a 16-bit operation word. The following table documents each command per the Motorola CPU32 Reference Manual and MC68331 User's Manual, along with the current firmware implementation status.
+
+### Command Registry
+
+| # | Command | Mnemonic | 16-bit Opcode Pattern | Firmware Status |
+|---|---------|----------|----------------------|-----------------|
+| 1 | Read A/D Register | RAREG/RDREG | `0x4200 \| (A/D<<2) \| REG` | Stub (no opcode, no operands) |
+| 2 | Write A/D Register | WAREG/WDREG | `0x4100 \| (A/D<<2) \| REG` | Stub (no opcode, no operands) |
+| 3 | Read System Register | RSREG | `0x2400 \| (REG<<3)` | **Not implemented** |
+| 4 | Write System Register | WSREG | `0x2400 \| (REG<<3)` | **Not implemented** |
+| 5 | Read Memory Location | READ | `0x0B00 \| (SIZE<<3)` | Stub (no address, no opcode) |
+| 6 | Write Memory Location | WRITE | `0x0C00 \| (SIZE<<3)` | Stub (no address, no opcode) |
+| 7 | Dump Memory Block | DUMP | `0x0F00 \| (SIZE<<3)` | **Not implemented** |
+| 8 | Fill Memory Block | FILL | `0x0E00 \| (SIZE<<3)` | **Not implemented** |
+| 9 | Resume Execution | GO | `0x0300` | Stub (no opcode sent) |
+| 10 | Call User Code | CALL | `0x0200` | **Not implemented** |
+| 11 | Reset Peripherals | RST | `0x0100` | Stub (no opcode sent) |
+| 12 | No Operation | NOP | `0x0000` | **Not implemented** |
+
+### System Register Select Codes (RSREG/WSREG)
+
+| Register | Select Code |
+|----------|------------|
+| Return Program Counter (RPC) | `0000` |
+| Current Instruction PC (PCC) | `0001` |
+| Temporary Register A (ATEMP) | `1000` |
+| Fault Address Register (FAR) | `1001` |
+| Vector Base Register (VBR) | `1010` |
+| Status Register (SR) | `1011` |
+| User Stack Pointer (USP) | `1100` |
+| Supervisor Stack Pointer (SSP) | `1101` |
+| Source Function Code (SFC) | `1110` |
+| Destination Function Code (DFC) | `1111` |
+
+### BDM Entry Source Codes (ATEMP)
+
+When entering BDM, the CPU writes a source code to ATEMP. The first command after entering BDM should be RSREG to read ATEMP before it gets overwritten.
+
+| Source | ATEMP Value |
+|--------|------------|
+| Double Bus Fault | `$00000001` |
+| External BKPT | `$00000002` |
+| BGND Instruction | `$00000003` |
+| Peripheral Breakpoint | `$00000004` |
+
+### Implementation Gaps
+
+The following areas need work to achieve spec-compliant BDM:
+
+1. **`bdm_core.c` functions are stubs** - All functions ignore their parameters, send no proper 16-bit opcodes, transmit no address/data operands, and don't read responses from the target.
+2. **RSREG/WSREG missing** - System register access (RPC, PCC, SR, USP, SSP, SFC, DFC, ATEMP, FAR, VBR) is not implemented. Only A/D register access is stubbed.
+3. **DUMP/FILL missing** - Bulk memory transfer commands that auto-increment the address from the preceding READ/WRITE.
+4. **CALL missing** - Code patching command that stacks the current PC and jumps to a user-supplied address.
+5. **NOP missing** - Null command needed for inter-command padding without corrupting the DUMP/FILL address pointer.
+6. **Breakpoint commands** - `CMD_BREAKPOINT_SET` and `CMD_BREAKPOINT_CLR` are defined in `config.h` but never dispatched in `main.c`.
+7. **Serial protocol** - BDM uses 16-bit words shifted MSB-first on the serial interface. The current firmware shifts single bytes, not 16-bit words.
+
 ## Host Communication Protocol
 
 ### Serial Protocol
