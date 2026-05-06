@@ -90,18 +90,18 @@ The CPU32 BDM protocol defines 12 commands, each encoded as a 16-bit operation w
 
 | # | Command | Mnemonic | 16-bit Opcode Pattern | Firmware Status |
 |---|---------|----------|----------------------|-----------------|
-| 1 | Read A/D Register | RAREG/RDREG | `0x4200 \| (A/D<<2) \| REG` | Stub (no opcode, no operands) |
-| 2 | Write A/D Register | WAREG/WDREG | `0x4100 \| (A/D<<2) \| REG` | Stub (no opcode, no operands) |
-| 3 | Read System Register | RSREG | `0x2400 \| (REG<<3)` | **Not implemented** |
-| 4 | Write System Register | WSREG | `0x2400 \| (REG<<3)` | **Not implemented** |
-| 5 | Read Memory Location | READ | `0x0B00 \| (SIZE<<3)` | Stub (no address, no opcode) |
-| 6 | Write Memory Location | WRITE | `0x0C00 \| (SIZE<<3)` | Stub (no address, no opcode) |
-| 7 | Dump Memory Block | DUMP | `0x0F00 \| (SIZE<<3)` | **Not implemented** |
-| 8 | Fill Memory Block | FILL | `0x0E00 \| (SIZE<<3)` | **Not implemented** |
-| 9 | Resume Execution | GO | `0x0300` | Stub (no opcode sent) |
-| 10 | Call User Code | CALL | `0x0200` | **Not implemented** |
-| 11 | Reset Peripherals | RST | `0x0100` | Stub (no opcode sent) |
-| 12 | No Operation | NOP | `0x0000` | **Not implemented** |
+| 1 | Read A/D Register | RAREG/RDREG | `0x4200 \| (A/D<<2) \| REG` | **Implemented** |
+| 2 | Write A/D Register | WAREG/WDREG | `0x4100 \| (A/D<<2) \| REG` | **Implemented** |
+| 3 | Read System Register | RSREG | `0x2500 \| (REG<<3)` | **Implemented** |
+| 4 | Write System Register | WSREG | `0x2400 \| (REG<<3)` | **Implemented** |
+| 5 | Read Memory Location | READ | `0x0B00 \| (SIZE<<2)` | **Implemented** |
+| 6 | Write Memory Location | WRITE | `0x0C00 \| (SIZE<<2)` | **Implemented** |
+| 7 | Dump Memory Block | DUMP | `0x0F00 \| (SIZE<<2)` | **Implemented** |
+| 8 | Fill Memory Block | FILL | `0x0E00 \| (SIZE<<2)` | **Implemented** |
+| 9 | Resume Execution | GO | `0x0300` | **Implemented** |
+| 10 | Call User Code | CALL | `0x0200` | **Implemented** |
+| 11 | Reset Peripherals | RST | `0x0100` | **Implemented** |
+| 12 | No Operation | NOP | `0x0000` | **Implemented** |
 
 ### System Register Select Codes (RSREG/WSREG)
 
@@ -129,17 +129,25 @@ When entering BDM, the CPU writes a source code to ATEMP. The first command afte
 | BGND Instruction | `$00000003` |
 | Peripheral Breakpoint | `$00000004` |
 
-### Implementation Gaps
+### What's Implemented
 
-The following areas need work to achieve spec-compliant BDM:
+All 12 BDM commands from the CPU32 specification are now implemented:
 
-1. **`bdm_core.c` functions are stubs** - All functions ignore their parameters, send no proper 16-bit opcodes, transmit no address/data operands, and don't read responses from the target.
-2. **RSREG/WSREG missing** - System register access (RPC, PCC, SR, USP, SSP, SFC, DFC, ATEMP, FAR, VBR) is not implemented. Only A/D register access is stubbed.
-3. **DUMP/FILL missing** - Bulk memory transfer commands that auto-increment the address from the preceding READ/WRITE.
-4. **CALL missing** - Code patching command that stacks the current PC and jumps to a user-supplied address.
-5. **NOP missing** - Null command needed for inter-command padding without corrupting the DUMP/FILL address pointer.
-6. **Breakpoint commands** - `CMD_BREAKPOINT_SET` and `CMD_BREAKPOINT_CLR` are defined in `config.h` but never dispatched in `main.c`.
-7. **Serial protocol** - BDM uses 16-bit words shifted MSB-first on the serial interface. The current firmware shifts single bytes, not 16-bit words.
+1. **RAREG/WAREG** - Read/write data and address registers (D0-D7, A0-A7)
+2. **RSREG/WSREG** - Read/write system registers (RPC, PCC, SR, USP, SSP, SFC, DFC, ATEMP, FAR, VBR)
+3. **READ/WRITE** - Memory access with byte, word, and long size support
+4. **DUMP/FILL** - Bulk memory transfers with auto-incrementing address pointer
+5. **GO/CALL** - Resume execution or call user code at specified address
+6. **RST/NOP** - Target reset and no-op for inter-command padding
+7. **STEP** - Single-step execution via PC inspection and instruction length calculation
+8. **16-bit word shifting** - BDM protocol uses 16-bit words shifted MSB-first on BDD
+
+### Remaining Work
+
+1. **Breakpoint hardware** - `CMD_BREAKPOINT_SET`/`CMD_BREAKPOINT_CLR` return OK but don't use hardware breakpoint support
+2. **BDREQ/BDMACK handshake** - Handshake signals are configured but not actively used in the protocol
+3. **Error recovery** - BERR/AERR detection works, but retry logic is minimal
+4. **MC68331-specific extensions** - Target-specific register map and peripheral debug not yet implemented
 
 ## Host Communication Protocol
 
@@ -156,8 +164,8 @@ Response format: [STX][RSP][LEN][PAYLOAD...][CHECKSUM][ETX]
 |------|-----------------|------------------------------------|
 | 0x10 | MEM_READ        | Read target memory                 |
 | 0x11 | MEM_WRITE       | Write target memory                |
-| 0x12 | REG_READ        | Read target register               |
-| 0x13 | REG_WRITE       | Write target register              |
+| 0x12 | REG_READ        | Read A/D register                  |
+| 0x13 | REG_WRITE       | Write A/D register                 |
 | 0x14 | TARGET_RESET    | Reset target                       |
 | 0x15 | TARGET_HALT     | Halt target execution              |
 | 0x16 | TARGET_GO       | Resume target execution            |
@@ -166,6 +174,11 @@ Response format: [STX][RSP][LEN][PAYLOAD...][CHECKSUM][ETX]
 | 0x19 | BREAKPOINT_CLR  | Clear hardware breakpoint          |
 | 0x1A | STATUS          | Query bridge and target status     |
 | 0x1B | CONFIG          | Configure bridge parameters        |
+| 0x1C | SYSREG_READ     | Read system register (RPC,PCC,SR..) |
+| 0x1D | SYSREG_WRITE    | Write system register              |
+| 0x1E | MEM_DUMP        | Bulk read memory (auto-increment)  |
+| 0x1F | MEM_FILL        | Bulk write memory (auto-increment) |
+| 0x20 | CALL            | Call target code at address        |
 
 Command codes start at 0x10 to avoid conflicts with protocol delimiters (STX=0x02, ETX=0x03).
 
@@ -232,24 +245,18 @@ make test
 
 The test suite verifies protocol-level behavior (framing, checksums, command responses). Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol tests still pass.
 
-### Test Cases
+### Test Cases (40 tests)
 
-| Test | Description |
-|------|-------------|
-| `serial_connection` | Serial port opens and bridge responds |
-| `response_format` | Response frames have correct STX/ETX, 0x80 bit set |
-| `status_command` | STATUS command returns RSP_OK |
-| `config_command` | CONFIG command returns RSP_OK |
-| `invalid_command` | Unknown command returns RSP_NOT_SUPPORTED |
-| `bad_checksum_rejected` | Frames with bad checksum are silently dropped |
-| `incomplete_frame` | Bridge recovers after receiving truncated frames |
-| `mem_read_valid_format` | MEM_READ with valid address format elicits response |
-| `mem_read_no_target` | MEM_READ returns RSP_TARGET_ERROR without target |
-| `mem_write_no_target` | MEM_WRITE returns RSP_TARGET_ERROR without target |
-| `reg_read_no_target` | REG_READ returns RSP_TARGET_ERROR without target |
-| `reg_write_no_target` | REG_WRITE returns RSP_TARGET_ERROR without target |
-| `target_reset_no_target` | TARGET_RESET returns RSP_TARGET_ERROR without target |
-| `target_halt_no_target` | TARGET_HALT returns RSP_TARGET_ERROR without target |
+| Category | Count | Description |
+|----------|-------|-------------|
+| Frame Construction | 7 | STX/ETX framing, checksum, payload parsing |
+| Command Codes | 2 | All 16 commands and 5 response codes defined |
+| BDM OpCodes | 4 | Memory, register, control opcodes and size encoding |
+| Protocol Simulation | 10 | Memory R/W, dump/fill, registers, status, BERR |
+| BDM Engine | 7 | Payload construction, size conversion, u32 pack/unpack |
+| Error Handling | 3 | Timeout, target error, not supported responses |
+| BDM Timing | 2 | Clock period, timeout calculations |
+| Edge Cases | 5 | Empty payload, max payload, STX in payload, etc. |
 
 ## Development Environment
 
@@ -338,8 +345,9 @@ make eeprom
 - BDM clock speed limited by AVR CPU frequency (16 MHz)
 - No JTAG support (BDM-only)
 - Memory access speed constrained by synchronous BDM protocol
-- Breakpoint support not yet implemented
-- MC68331 target-specific code (register map, quirks) not yet implemented
+- Breakpoint commands return OK but don't use hardware breakpoint support
+- BDREQ/BDMACK handshake signals configured but not actively used
+- MC68331 target-specific extensions (peripheral debug) not yet implemented
 
 ## References
 

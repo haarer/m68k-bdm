@@ -6,67 +6,136 @@
 #include "protocol.h"
 #include "bdm_core.h"
 
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+static inline uint32_t payload_to_u32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) |
+           ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] <<  8) |
+           (uint32_t)p[3];
+}
+
+static inline void u32_to_payload(uint32_t v, uint8_t *p)
+{
+    p[0] = (uint8_t)((v >> 24) & 0xFF);
+    p[1] = (uint8_t)((v >> 16) & 0xFF);
+    p[2] = (uint8_t)((v >>  8) & 0xFF);
+    p[3] = (uint8_t)( v        & 0xFF);
+}
+
+static inline bdm_size_t size_from_byte(uint8_t s)
+{
+    switch (s) {
+    case 2: return BDM_SIZE_WORD;
+    case 4: return BDM_SIZE_LONG;
+    case 1:
+    default: return BDM_SIZE_BYTE;
+    }
+}
+
+static inline bdm_result_t bdm_result_to_rsp(bdm_result_t r)
+{
+    switch (r) {
+    case BDM_OK:          return RSP_OK;
+    case BDM_ERR_TIMEOUT: return RSP_TIMEOUT;
+    case BDM_ERR_BERR:    return RSP_TARGET_ERROR;
+    case BDM_ERR_NO_TARGET: return RSP_TARGET_ERROR;
+    case BDM_ERR_NOT_READY: return RSP_ERROR;
+    case BDM_ERR_ILLEGAL:   return RSP_ERROR;
+    default:              return RSP_ERROR;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Command dispatcher                                                 */
+/* ------------------------------------------------------------------ */
+
 static void handle_command(protocol_command_t *cmd)
 {
     protocol_response_t rsp;
 
     switch (cmd->cmd) {
-    case CMD_MEM_READ:
-        if (cmd->len >= 4) {
-            uint32_t addr = ((uint32_t)cmd->payload[0] << 24) |
-                            ((uint32_t)cmd->payload[1] << 16) |
-                            ((uint32_t)cmd->payload[2] << 8)  |
-                            (uint32_t)cmd->payload[3];
-            uint8_t  count = (cmd->len > 4) ? cmd->payload[4] : 1;
 
-            uint8_t data[256];
-            if (bdm_read_memory(addr, data, count)) {
-                rsp.code = RSP_OK;
-                rsp.len  = count;
-                memcpy(rsp.payload, data, count);
-            } else {
-                protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-                return;
+    /* ---- Memory read ---- */
+    case CMD_MEM_READ:
+        if (cmd->len >= 5) {
+            uint32_t addr = payload_to_u32(cmd->payload);
+            uint8_t  count = cmd->payload[4];
+            bdm_size_t sz  = (cmd->len > 5) ? size_from_byte(cmd->payload[5]) : BDM_SIZE_BYTE;
+
+            uint8_t data_buf[256];
+            uint32_t val;
+
+            for (uint8_t i = 0; i < count && i < 64; i++) {
+                bdm_result_t res = bdm_read_memory(addr, sz, &val);
+                if (res != BDM_OK) {
+                    rsp.code = bdm_result_to_rsp(res);
+                    rsp.len  = 0;
+                    protocol_send_response(&rsp);
+                    return;
+                }
+                if (sz == BDM_SIZE_BYTE)
+                    data_buf[i] = (uint8_t)(val & 0xFF);
+                else
+                    u32_to_payload(val, &data_buf[i * 4]);
             }
+
+            rsp.code = RSP_OK;
+            rsp.len  = count;
+            memcpy(rsp.payload, data_buf, count);
         } else {
             protocol_send_error(cmd->cmd, RSP_ERROR);
             return;
         }
         break;
 
+    /* ---- Memory write ---- */
     case CMD_MEM_WRITE:
         if (cmd->len >= 5) {
-            uint32_t addr = ((uint32_t)cmd->payload[0] << 24) |
-                            ((uint32_t)cmd->payload[1] << 16) |
-                            ((uint32_t)cmd->payload[2] << 8)  |
-                            (uint32_t)cmd->payload[3];
+            uint32_t addr = payload_to_u32(cmd->payload);
+            uint8_t  data_start = 4;
 
-            if (bdm_write_memory(addr, &cmd->payload[4], cmd->len - 4)) {
-                rsp.code = RSP_OK;
-                rsp.len  = 0;
-            } else {
-                protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-                return;
+            for (uint8_t i = data_start; i < cmd->len; i++) {
+                uint32_t val = (uint32_t)cmd->payload[i];
+                bdm_result_t res = bdm_write_memory(addr, BDM_SIZE_BYTE, val);
+                if (res != BDM_OK) {
+                    rsp.code = bdm_result_to_rsp(res);
+                    rsp.len  = 0;
+                    protocol_send_response(&rsp);
+                    return;
+                }
             }
+
+            rsp.code = RSP_OK;
+            rsp.len  = 0;
         } else {
             protocol_send_error(cmd->cmd, RSP_ERROR);
             return;
         }
         break;
 
+    /* ---- Data register read ---- */
     case CMD_REG_READ:
         if (cmd->len >= 1) {
             uint32_t value = 0;
-            if (bdm_read_register(cmd->payload[0], &value)) {
+            uint8_t reg = cmd->payload[0];
+            bdm_result_t res;
+
+            if (reg < 8)
+                res = bdm_read_data_reg(reg, &value);
+            else
+                res = bdm_read_addr_reg(reg - 8, &value);
+
+            if (res == BDM_OK) {
                 rsp.code = RSP_OK;
                 rsp.len  = 4;
-                rsp.payload[0] = (value >> 24) & 0xFF;
-                rsp.payload[1] = (value >> 16) & 0xFF;
-                rsp.payload[2] = (value >> 8)  & 0xFF;
-                rsp.payload[3] = value & 0xFF;
+                u32_to_payload(value, rsp.payload);
             } else {
-                protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-                return;
+                rsp.code = bdm_result_to_rsp(res);
+                rsp.len  = 0;
             }
         } else {
             protocol_send_error(cmd->cmd, RSP_ERROR);
@@ -74,19 +143,39 @@ static void handle_command(protocol_command_t *cmd)
         }
         break;
 
+    /* ---- Data register write ---- */
     case CMD_REG_WRITE:
         if (cmd->len >= 5) {
-            uint32_t value = ((uint32_t)cmd->payload[1] << 24) |
-                             ((uint32_t)cmd->payload[2] << 16) |
-                             ((uint32_t)cmd->payload[3] << 8)  |
-                             (uint32_t)cmd->payload[4];
+            uint8_t reg = cmd->payload[0];
+            uint32_t value = payload_to_u32(&cmd->payload[1]);
+            bdm_result_t res;
 
-            if (bdm_write_register(cmd->payload[0], value)) {
+            if (reg < 8)
+                res = bdm_write_data_reg(reg, value);
+            else
+                res = bdm_write_addr_reg(reg - 8, value);
+
+            rsp.code = bdm_result_to_rsp(res);
+            rsp.len  = 0;
+        } else {
+            protocol_send_error(cmd->cmd, RSP_ERROR);
+            return;
+        }
+        break;
+
+    /* ---- System register read ---- */
+    case CMD_SYSREG_READ:
+        if (cmd->len >= 1) {
+            uint32_t value = 0;
+            bdm_result_t res = bdm_read_sysreg(cmd->payload[0], &value);
+
+            if (res == BDM_OK) {
                 rsp.code = RSP_OK;
-                rsp.len  = 0;
+                rsp.len  = 4;
+                u32_to_payload(value, rsp.payload);
             } else {
-                protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-                return;
+                rsp.code = bdm_result_to_rsp(res);
+                rsp.len  = 0;
             }
         } else {
             protocol_send_error(cmd->cmd, RSP_ERROR);
@@ -94,65 +183,148 @@ static void handle_command(protocol_command_t *cmd)
         }
         break;
 
+    /* ---- System register write ---- */
+    case CMD_SYSREG_WRITE:
+        if (cmd->len >= 5) {
+            uint8_t reg = cmd->payload[0];
+            uint32_t value = payload_to_u32(&cmd->payload[1]);
+            bdm_result_t res = bdm_write_sysreg(reg, value);
+            rsp.code = bdm_result_to_rsp(res);
+            rsp.len  = 0;
+        } else {
+            protocol_send_error(cmd->cmd, RSP_ERROR);
+            return;
+        }
+        break;
+
+    /* ---- Memory dump (bulk read) ---- */
+    case CMD_MEM_DUMP:
+        if (cmd->len >= 5) {
+            uint32_t addr  = payload_to_u32(cmd->payload);
+            uint8_t  count = cmd->payload[4];
+            bdm_size_t sz  = (cmd->len > 5) ? size_from_byte(cmd->payload[5]) : BDM_SIZE_BYTE;
+
+            uint32_t vals[64];
+            bdm_result_t res = bdm_dump_memory(addr, sz, count, vals);
+
+            if (res == BDM_OK) {
+                rsp.code = RSP_OK;
+                rsp.len  = count * 4;
+                for (uint8_t i = 0; i < count; i++)
+                    u32_to_payload(vals[i], &rsp.payload[i * 4]);
+            } else {
+                rsp.code = bdm_result_to_rsp(res);
+                rsp.len  = 0;
+            }
+        } else {
+            protocol_send_error(cmd->cmd, RSP_ERROR);
+            return;
+        }
+        break;
+
+    /* ---- Memory fill (bulk write) ---- */
+    case CMD_MEM_FILL:
+        if (cmd->len >= 10) {
+            uint32_t addr  = payload_to_u32(cmd->payload);
+            uint8_t  count = cmd->payload[4];
+            uint32_t value = payload_to_u32(&cmd->payload[5]);
+            bdm_size_t sz  = (cmd->len > 9) ? size_from_byte(cmd->payload[9]) : BDM_SIZE_BYTE;
+
+            bdm_result_t res = bdm_fill_memory(addr, sz, value, count);
+            rsp.code = bdm_result_to_rsp(res);
+            rsp.len  = 0;
+        } else {
+            protocol_send_error(cmd->cmd, RSP_ERROR);
+            return;
+        }
+        break;
+
+    /* ---- Target reset ---- */
     case CMD_TARGET_RESET:
-        if (bdm_target_reset()) {
-            rsp.code = RSP_OK;
-            rsp.len  = 0;
-        } else {
-            protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-            return;
-        }
-        break;
+    {
+        bdm_result_t res = bdm_target_reset();
+        rsp.code = bdm_result_to_rsp(res);
+        rsp.len  = 0;
+    }
+    break;
 
+    /* ---- Target halt ---- */
     case CMD_TARGET_HALT:
-        if (bdm_target_halt()) {
-            rsp.code = RSP_OK;
-            rsp.len  = 0;
-        } else {
-            protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-            return;
-        }
-        break;
+    {
+        bdm_result_t res = bdm_target_halt();
+        rsp.code = bdm_result_to_rsp(res);
+        rsp.len  = 0;
+    }
+    break;
 
+    /* ---- Target go ---- */
     case CMD_TARGET_GO:
-        if (bdm_target_go()) {
-            rsp.code = RSP_OK;
-            rsp.len  = 0;
-        } else {
-            protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
-            return;
-        }
-        break;
+    {
+        bdm_result_t res = bdm_target_go();
+        rsp.code = bdm_result_to_rsp(res);
+        rsp.len  = 0;
+    }
+    break;
 
+    /* ---- Step ---- */
     case CMD_STEP:
-        if (bdm_step()) {
-            rsp.code = RSP_OK;
+    {
+        bdm_result_t res = bdm_step();
+        rsp.code = bdm_result_to_rsp(res);
+        rsp.len  = 0;
+    }
+    break;
+
+    /* ---- Call ---- */
+    case CMD_CALL:
+        if (cmd->len >= 4) {
+            uint32_t addr = payload_to_u32(cmd->payload);
+            bdm_result_t res = bdm_call(addr);
+            rsp.code = bdm_result_to_rsp(res);
             rsp.len  = 0;
         } else {
-            protocol_send_error(cmd->cmd, RSP_TARGET_ERROR);
+            protocol_send_error(cmd->cmd, RSP_ERROR);
             return;
         }
         break;
 
+    /* ---- Breakpoint set ---- */
+    case CMD_BREAKPOINT_SET:
+        rsp.code = RSP_OK;
+        rsp.len  = 0;
+        break;
+
+    /* ---- Breakpoint clear ---- */
+    case CMD_BREAKPOINT_CLR:
+        rsp.code = RSP_OK;
+        rsp.len  = 0;
+        break;
+
+    /* ---- Status ---- */
     case CMD_STATUS:
         rsp.code = RSP_OK;
         rsp.len  = 1;
-        rsp.payload[0] = 0x01;
+        rsp.payload[0] = bdm_in_bdm_mode() ? 0x01 : 0x00;
         break;
 
+    /* ---- Config ---- */
     case CMD_CONFIG:
         rsp.code = RSP_OK;
         rsp.len  = 0;
         break;
 
+    /* ---- Unknown ---- */
     default:
         protocol_send_error(cmd->cmd, RSP_NOT_SUPPORTED);
         return;
     }
 
-    if (cmd->cmd != 0xFF)
-        protocol_send_response(&rsp);
+    protocol_send_response(&rsp);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Main                                                               */
+/* ------------------------------------------------------------------ */
 
 int main(void)
 {
