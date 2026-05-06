@@ -179,7 +179,7 @@ Bridge accepts CONFIG commands to adjust:
 
 - **Source**: [haarer/toolchain68k gcc152](https://github.com/haarer/toolchain68k/releases/tag/gcc152)
 - **Package**: `toolchain-avr-alpine-gcc-15.2.0.tar.gz`
-- **Install Path**: `/opt` (binaries in `/opt/bin/`, libs in `/opt/lib/`, AVR libs in `/opt/avr/lib/`)
+- **Install Path**: `/opt` (binaries in `/opt/toolchain-avr-current/bin/`, libs in `/opt/toolchain-avr-current/lib/`, AVR libs in `/opt/toolchain-avr-current/avr/lib/`)
 - **Components**:
   - avr-gcc 15.2.0
   - avr-gdb 17.1
@@ -202,24 +202,25 @@ apt install avrdude
 
 ### Using Makefile
 
-The Makefile provides a `flash` target:
+The Makefile provides a `flash` target using the `wiring` programmer (STK500 v2 protocol):
 ```sh
-make flash PREFIX=/dev/ttyACM0
+make flash
 ```
 
-Note: The default programmer is `arduino` which may not work with all bootloaders. If flashing fails, use the manual method below.
-
-### Manual Flashing
-
-Use avrdude with the `wiring` programmer (STK500 v2 protocol):
+Override connection parameters:
 ```sh
-avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -U flash:w:bdm_bridge.hex:i
+make flash PORT=/dev/ttyACM0 BAUD=115200
 ```
 
-If chip erase fails, skip it with the `-D` flag:
-```sh
-avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -D -U flash:w:bdm_bridge.hex:i
-```
+The flash target uses the `-D` flag to skip chip erase, which avoids erase failures on some bootloaders.
+
+### Makefile Variables
+
+| Variable | Default       | Description                    |
+|----------|---------------|--------------------------------|
+| PORT     | /dev/ttyACM0  | Serial port device             |
+| BAUD     | 115200        | Baud rate                      |
+| PROG     | wiring        | avrdude programmer type        |
 
 ### Verify Device Connection
 
@@ -234,7 +235,7 @@ Expected output includes: `Device signature = 1E 98 01 (ATmega2560)`
 
 To flash the EEPROM image:
 ```sh
-avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -U eeprom:w:bdm_bridge.eep:i
+make eeprom
 ```
 
 ### Host Toolchain (Target Development)

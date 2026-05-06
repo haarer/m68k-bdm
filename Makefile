@@ -30,8 +30,10 @@ OBJS       := $(SRCS:.c=.o)
 
 TARGET     := bdm_bridge
 
-PREFIX     ?= /dev/ttyUSB0
+AVRDUDE    := avrdude
+PORT       ?= /dev/ttyACM0
 BAUD       ?= 115200
+PROG       ?= wiring
 
 all: $(TARGET).hex $(TARGET).eep size
 
@@ -55,13 +57,13 @@ size: $(TARGET).elf
 	$(SIZE) --format=avr $<
 
 flash: $(TARGET).hex
-	avrdude -c arduino -p $(DEVICE) -P $(PREFIX) -b $(BAUD) -U flash:w:$<:i
+	$(AVRDUDE) -c $(PROG) -p $(DEVICE) -P $(PORT) -b $(BAUD) -D -U flash:w:$<:i
 
 eeprom: $(TARGET).eep
-	avrdude -c arduino -p $(DEVICE) -P $(PREFIX) -b $(BAUD) -U eeprom:w:$<:i
+	$(AVRDUDE) -c $(PROG) -p $(DEVICE) -P $(PORT) -b $(BAUD) -D -U eeprom:w:$<:i
 
 fuse:
-	avrdude -c arduino -p $(DEVICE) -P $(PREFIX) -b $(BAUD) \
+	$(AVRDUDE) -c $(PROG) -p $(DEVICE) -P $(PORT) -b $(BAUD) \
 		-U hfuse:w:0xD2:m -U lfuse:w:0xFF:m
 
 clean:
