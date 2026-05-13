@@ -69,9 +69,16 @@ the CPU32 Reference Manual §7.2.7. The development system (bridge) is the maste
 - **FREEZE**: CPU output indicating BDM entry. Asserted (low) when CPU enters
   BDM, negated when CPU returns to normal mode.
 
+### BDM Enable (CPU32 §7.2.1)
+BDM is enabled once during reset, not on every command. The bridge asserts BKPT
+(low) while toggling the target RESET line. BKPT must be held low for at least
+two target clock cycles before RESET goes high. At the rising edge of RESET,
+BKPT samples low and BDM is enabled. BDM remains enabled until the next system
+reset. The bridge calls `bdm_enable()` once at startup.
+
 ### Command Frame Format
 Each BDM transaction consists of:
-1. **Preamble**: Assert BKPT (DSCLK low), wait for FREEZE, then begin clocking
+1. **Preamble**: Drop BKPT (DSCLK low), wait for FREEZE assertion, then begin clocking
 2. **17-bit Words**: 16 data bits + 1 status bit on DSO, shifted MSB first,
    full-duplex (DSI and DSO simultaneous)
 3. **Address/Parameter Fields**: Variable length depending on command
@@ -140,14 +147,16 @@ When entering BDM, the CPU writes a source code to ATEMP. The first command afte
 
 All 12 BDM commands from the CPU32 specification are now implemented:
 
-1. **RAREG/WAREG** - Read/write data and address registers (D0-D7, A0-A7)
-2. **RSREG/WSREG** - Read/write system registers (RPC, PCC, SR, USP, SSP, SFC, DFC, ATEMP, FAR, VBR)
-3. **READ/WRITE** - Memory access with byte, word, and long size support
-4. **DUMP/FILL** - Bulk memory transfers with auto-incrementing address pointer
-5. **GO/CALL** - Resume execution or call user code at specified address
-6. **RST/NOP** - Target reset and no-op for inter-command padding
-7. **STEP** - Single-step execution via PC inspection and instruction length calculation
-8. **16-bit word shifting** - BDM protocol uses 16-bit words shifted MSB-first on BDD
+1. **BDM Enable** - One-time reset sequence per §7.2.1: BKPT asserted low, target RESET toggled so BKPT samples low at rising edge, FREEZE monitored
+2. **Preamble** - Per-command BKPT drop + FREEZE wait (separate from BDM enable)
+3. **RAREG/WAREG** - Read/write data and address registers (D0-D7, A0-A7)
+4. **RSREG/WSREG** - Read/write system registers (RPC, PCC, SR, USP, SSP, SFC, DFC, ATEMP, FAR, VBR)
+5. **READ/WRITE** - Memory access with byte, word, and long size support
+6. **DUMP/FILL** - Bulk memory transfers with auto-incrementing address pointer
+7. **GO/CALL** - Resume execution or call user code at specified address
+8. **RST/NOP** - Target reset and no-op for inter-command padding
+9. **STEP** - Single-step execution via PC inspection and instruction length calculation
+10. **16-bit word shifting** - BDM protocol uses 16-bit words shifted MSB-first on BDD
 
 ### Remaining Work
 
@@ -169,23 +178,24 @@ Response format: [STX][RSP][LEN][PAYLOAD...][CHECKSUM][ETX]
 ### Command Set
 | Code | Command         | Description                        |
 |------|-----------------|------------------------------------|
-| 0x10 | MEM_READ        | Read target memory                 |
-| 0x11 | MEM_WRITE       | Write target memory                |
-| 0x12 | REG_READ        | Read A/D register                  |
-| 0x13 | REG_WRITE       | Write A/D register                 |
-| 0x14 | TARGET_RESET    | Reset target                       |
-| 0x15 | TARGET_HALT     | Halt target execution              |
-| 0x16 | TARGET_GO       | Resume target execution            |
-| 0x17 | STEP            | Single-step target                 |
-| 0x18 | BREAKPOINT_SET  | Set hardware breakpoint            |
-| 0x19 | BREAKPOINT_CLR  | Clear hardware breakpoint          |
-| 0x1A | STATUS          | Query bridge and target status     |
-| 0x1B | CONFIG          | Configure bridge parameters        |
-| 0x1C | SYSREG_READ     | Read system register (RPC,PCC,SR..) |
-| 0x1D | SYSREG_WRITE    | Write system register              |
-| 0x1E | MEM_DUMP        | Bulk read memory (auto-increment)  |
-| 0x1F | MEM_FILL        | Bulk write memory (auto-increment) |
-| 0x20 | CALL            | Call target code at address        |
+| 0x10 | BDM_ENABLE      | Enable BDM via reset sequence (§7.2.1) |
+| 0x11 | MEM_READ        | Read target memory                 |
+| 0x12 | MEM_WRITE       | Write target memory                |
+| 0x13 | REG_READ        | Read A/D register                  |
+| 0x14 | REG_WRITE       | Write A/D register                 |
+| 0x15 | TARGET_RESET    | Reset target                       |
+| 0x16 | TARGET_HALT     | Halt target execution              |
+| 0x17 | TARGET_GO       | Resume target execution            |
+| 0x18 | STEP            | Single-step target                 |
+| 0x19 | BREAKPOINT_SET  | Set hardware breakpoint            |
+| 0x1A | BREAKPOINT_CLR  | Clear hardware breakpoint          |
+| 0x1B | STATUS          | Query bridge and target status     |
+| 0x1C | CONFIG          | Configure bridge parameters        |
+| 0x1D | SYSREG_READ     | Read system register (RPC,PCC,SR..) |
+| 0x1E | SYSREG_WRITE    | Write system register              |
+| 0x1F | MEM_DUMP        | Bulk read memory (auto-increment)  |
+| 0x20 | MEM_FILL        | Bulk write memory (auto-increment) |
+| 0x21 | CALL            | Call target code at address        |
 
 Command codes start at 0x10 to avoid conflicts with protocol delimiters (STX=0x02, ETX=0x03).
 
@@ -252,14 +262,15 @@ make test
 
 The test suite sends real frames to the bridge over serial and validates every response. Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol framing, checksums, and response codes are verified end-to-end.
 
-### Test Cases (24 tests)
+### Test Cases (25 tests)
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | Frame Construction | 3 | STX/ETX framing, XOR checksum, payload embedding |
-| Bridge Integration | 21 | All 17 commands exercised over real serial, response codes validated |
+| Bridge Integration | 22 | All 18 commands exercised over real serial, response codes validated |
 
 **Non-BDM commands** (return `RSP_OK` without target): STATUS, CONFIG, BREAKPOINT_SET, BREAKPOINT_CLR
+**BDM enable** (return `RSP_TARGET_ERROR` without target): BDM_ENABLE (§7.2.1 reset sequence)
 **BDM commands** (return `RSP_TARGET_ERROR` without target): MEM_READ, MEM_WRITE, REG_READ, REG_WRITE, SYSREG_READ, SYSREG_WRITE, MEM_DUMP, MEM_FILL, TARGET_RESET, TARGET_HALT, TARGET_GO, STEP, CALL
 **Protocol edge cases**: unknown command returns `RSP_NOT_SUPPORTED`, short payload returns `RSP_ERROR`, rapid-fire commands, response framing validation
 

@@ -151,26 +151,34 @@ bool bdm_poll_ready(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Preamble (CPU32 §7.2.3, §7.2.7.2)                                 */
-/*      Assert BKPT (DSCLK line low), wait for FREEZE, then clock.    */
+/*  BDM Enable (CPU32 §7.2.1)                                          */
+/*      One-time: assert BKPT low, toggle RESET so BKPT samples low   */
+/*      at the rising edge of RESET. BKPT must be held low for at     */
+/*      least two target clock cycles prior to negation of RESET.     */
 /* ------------------------------------------------------------------ */
 
-bool bdm_send_preamble(void)
+bool bdm_enable(void)
 {
     cli();
 
-    /* Assert BKPT by holding DSCLK low */
+    /* 1. Assert BKPT (DSCLK low) */
     dsclk_low();
     dsi_high();
 
-    bdm_delay_full_period();
+    /* 2. Assert target RESET (active low) */
+    TARGET_RESET_PORT &= ~(1 << TARGET_RESET_BIT);
 
-    /* Wait for FREEZE to be asserted (active low on most boards) */
+    /* 3. Hold BKPT low for ≥2 target clock cycles before releasing RESET */
+    _delay_us(10);
+
+    /* 4. Release RESET — BKPT samples low at rising edge → BDM enabled */
+    TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
+
+    /* 5. Wait for FREEZE assertion */
     bdm_timeout_start();
 
     for (uint16_t i = 0; i < 1000; i++) {
         if (!freeze_read()) {
-            /* CPU has entered BDM, FREEZE asserted */
             sei();
             in_bdm_mode = true;
             return true;
@@ -182,6 +190,36 @@ bool bdm_send_preamble(void)
 
     sei();
     in_bdm_mode = false;
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Preamble (CPU32 §7.2.3, §7.2.7.2)                                 */
+/*      Per-command: drop BKPT, wait FREEZE, then clock command.      */
+/* ------------------------------------------------------------------ */
+
+static bool bdm_send_preamble(void)
+{
+    cli();
+
+    dsclk_low();
+    dsi_high();
+
+    bdm_delay_full_period();
+
+    bdm_timeout_start();
+
+    for (uint16_t i = 0; i < 1000; i++) {
+        if (!freeze_read()) {
+            sei();
+            return true;
+        }
+        if (bdm_timeout_exceeded())
+            break;
+        _delay_us(10);
+    }
+
+    sei();
     return false;
 }
 
@@ -720,6 +758,11 @@ void bdm_init(void)
     DSCLK_PORT     |=  (1 << DSCLK_BIT);
     DSI_PORT       &= ~(1 << DSI_BIT);
     TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
+
+    /* Enable pull-ups on input pins so they read high (no target)
+       when nothing is connected. */
+    FREEZE_PORT    |=  (1 << FREEZE_BIT);
+    DSO_PORT       |=  (1 << DSO_BIT);
 
     in_bdm_mode = false;
     bdm_timing_init();

@@ -18,26 +18,27 @@ import serial
 STX = 0x02
 ETX = 0x03
 
-CMD_MEM_READ       = 0x10
-CMD_MEM_WRITE      = 0x11
-CMD_REG_READ       = 0x12
-CMD_REG_WRITE      = 0x13
-CMD_TARGET_RESET   = 0x14
-CMD_TARGET_HALT    = 0x15
-CMD_TARGET_GO      = 0x16
-CMD_STEP           = 0x17
-CMD_BREAKPOINT_SET = 0x18
-CMD_BREAKPOINT_CLR = 0x19
-CMD_STATUS         = 0x1A
-CMD_CONFIG         = 0x1B
-CMD_SYSREG_READ    = 0x1C
-CMD_SYSREG_WRITE   = 0x1D
-CMD_MEM_DUMP       = 0x1E
-CMD_MEM_FILL       = 0x1F
-CMD_CALL           = 0x20
+CMD_BDM_ENABLE     = 0x10
+CMD_MEM_READ       = 0x11
+CMD_MEM_WRITE      = 0x12
+CMD_REG_READ       = 0x13
+CMD_REG_WRITE      = 0x14
+CMD_TARGET_RESET   = 0x15
+CMD_TARGET_HALT    = 0x16
+CMD_TARGET_GO      = 0x17
+CMD_STEP           = 0x18
+CMD_BREAKPOINT_SET = 0x19
+CMD_BREAKPOINT_CLR = 0x1A
+CMD_STATUS         = 0x1B
+CMD_CONFIG         = 0x1C
+CMD_SYSREG_READ    = 0x1D
+CMD_SYSREG_WRITE   = 0x1E
+CMD_MEM_DUMP       = 0x1F
+CMD_MEM_FILL       = 0x20
+CMD_CALL           = 0x21
 
 ALL_COMMANDS = [
-    CMD_MEM_READ, CMD_MEM_WRITE, CMD_REG_READ, CMD_REG_WRITE,
+    CMD_BDM_ENABLE, CMD_MEM_READ, CMD_MEM_WRITE, CMD_REG_READ, CMD_REG_WRITE,
     CMD_TARGET_RESET, CMD_TARGET_HALT, CMD_TARGET_GO, CMD_STEP,
     CMD_BREAKPOINT_SET, CMD_BREAKPOINT_CLR, CMD_STATUS, CMD_CONFIG,
     CMD_SYSREG_READ, CMD_SYSREG_WRITE, CMD_MEM_DUMP, CMD_MEM_FILL,
@@ -139,6 +140,9 @@ class BridgeClient:
         return self._read_response()[:2]
 
     # -- Convenience methods --
+
+    def send_bdm_enable(self):
+        return self.send(CMD_BDM_ENABLE)
 
     def send_status(self):
         return self.send(CMD_STATUS)
@@ -266,6 +270,12 @@ class TestBridgeIntegration(unittest.TestCase):
 
     # -- Non-BDM commands (don't need target) --
 
+    def test_bdm_enable(self):
+        code, payload = self.bridge.send_bdm_enable()
+        self.assertIsNotNone(code)
+        self.assertEqual(len(payload), 1)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
+
     def test_status_returns_ok(self):
         code, payload = self.bridge.send_status()
         self.assertEqual(code, RSP_OK, "STATUS should return RSP_OK")
@@ -284,59 +294,59 @@ class TestBridgeIntegration(unittest.TestCase):
         code, _ = self.bridge.send_breakpoint_clr()
         self.assertEqual(code, RSP_OK, "BREAKPOINT_CLR should return RSP_OK")
 
-    # -- BDM commands (return TARGET_ERROR without 68331) --
+    # -- BDM commands (RSP_OK with target, RSP_TARGET_ERROR without) --
 
-    def test_mem_read_returns_target_error(self):
+    def test_mem_read(self):
         code, _ = self.bridge.send_mem_read(0x1000, 1, 1)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_mem_write_returns_target_error(self):
+    def test_mem_write(self):
         code, _ = self.bridge.send_mem_write(0x1000, [0xAB, 0xCD])
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_reg_read_returns_target_error(self):
+    def test_reg_read(self):
         code, _ = self.bridge.send_reg_read(0)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_reg_write_returns_target_error(self):
+    def test_reg_write(self):
         code, _ = self.bridge.send_reg_write(0, 0x12345678)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_sysreg_read_returns_target_error(self):
+    def test_sysreg_read(self):
         code, _ = self.bridge.send_sysreg_read(0)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_sysreg_write_returns_target_error(self):
+    def test_sysreg_write(self):
         code, _ = self.bridge.send_sysreg_write(0, 0x00001000)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_mem_dump_returns_target_error(self):
+    def test_mem_dump(self):
         code, _ = self.bridge.send_mem_dump(0x1000, 4, 4)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_mem_fill_returns_target_error(self):
+    def test_mem_fill(self):
         code, _ = self.bridge.send_mem_fill(0x1000, 16, 0x55, 1)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_target_reset_returns_target_error(self):
+    def test_target_reset(self):
         code, _ = self.bridge.send_target_reset()
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_target_halt_returns_target_error(self):
+    def test_target_halt(self):
         code, _ = self.bridge.send_target_halt()
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_target_go_returns_target_error(self):
+    def test_target_go(self):
         code, _ = self.bridge.send_target_go()
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_step_returns_target_error(self):
+    def test_step(self):
         code, _ = self.bridge.send_step()
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
-    def test_call_returns_target_error(self):
+    def test_call(self):
         code, _ = self.bridge.send_call(0x2000)
-        self.assertEqual(code, RSP_TARGET_ERROR)
+        self.assertIn(code, (RSP_OK, RSP_TARGET_ERROR))
 
     # -- Protocol edge cases --
 

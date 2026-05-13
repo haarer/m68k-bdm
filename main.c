@@ -239,6 +239,16 @@ static void handle_command(protocol_command_t *cmd)
         }
         break;
 
+    /* ---- BDM Enable (one-time reset sequence, §7.2.1) ---- */
+    case CMD_BDM_ENABLE:
+    {
+        bool ok = bdm_enable();
+        rsp.code = ok ? RSP_OK : RSP_TARGET_ERROR;
+        rsp.len  = 1;
+        rsp.payload[0] = ok ? 0x01 : 0x00;
+    }
+    break;
+
     /* ---- Target reset ---- */
     case CMD_TARGET_RESET:
     {

@@ -54,6 +54,10 @@ typedef enum {
 
 void     bdm_init(void);
 
+/* Enable BDM on target: assert BKPT low, toggle RESET so BKPT samples
+   low at the rising edge of RESET (CPU32 §7.2.1).  One-time call.     */
+bool     bdm_enable(void);
+
 /* ------------------------------------------------------------------ */
 /*  Low-level serial protocol (CPU32 §7.2.7)                           */
 /*      17-bit full-duplex words: 16 data bits + 1 status bit (DSO)   */
