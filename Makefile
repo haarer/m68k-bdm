@@ -31,7 +31,7 @@ OBJS       := $(SRCS:.c=.o)
 TARGET     := bdm_bridge
 
 AVRDUDE    := avrdude
-PORT       ?= /dev/ttyACM0
+PORT       ?= /dev/ttyUSB0
 BAUD       ?= 115200
 PROG       ?= wiring
 

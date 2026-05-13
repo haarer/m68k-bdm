@@ -27,26 +27,26 @@
 /*        FREEZE indicates CPU has entered BDM (input to bridge)       */
 /* ------------------------------------------------------------------ */
 
-#define DSCLK_PORT     PORTA
-#define DSCLK_DDR      DDRA
-#define DSCLK_BIT      0
+#define DSCLK_PORT     PORTF
+#define DSCLK_DDR      DDRF
+#define DSCLK_BIT      1
 
-#define DSI_PORT       PORTA
-#define DSI_DDR        DDRA
-#define DSI_BIT        1
+#define DSI_PORT       PORTF
+#define DSI_DDR        DDRF
+#define DSI_BIT        0
 
-#define DSO_PORT       PORTB
-#define DSO_DDR        DDRB
-#define DSO_PIN        PINB
-#define DSO_BIT        0
+#define DSO_PORT       PORTF
+#define DSO_DDR        DDRF
+#define DSO_PIN        PINF
+#define DSO_BIT        4
 
-#define FREEZE_PORT    PORTB
-#define FREEZE_DDR     DDRB
-#define FREEZE_PIN     PINB
-#define FREEZE_BIT     1
+#define FREEZE_PORT    PORTF
+#define FREEZE_DDR     DDRF
+#define FREEZE_PIN     PINF
+#define FREEZE_BIT     3
 
-#define TARGET_RESET_PORT  PORTA
-#define TARGET_RESET_DDR   DDRA
+#define TARGET_RESET_PORT  PORTF
+#define TARGET_RESET_DDR   DDRF
 #define TARGET_RESET_BIT   2
 
 /* ------------------------------------------------------------------ */
