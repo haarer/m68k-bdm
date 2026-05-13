@@ -20,27 +20,30 @@
 
 /* ------------------------------------------------------------------ */
 /*  BDM Pins (Target side - ATmega2560 port mapping)                   */
+/*      Per CPU32 Reference Manual §7.2.7:                             */
+/*        BKPT  -> DSCLK  (serial clock, output from bridge)           */
+/*        IFETCH-> DSI    (serial data in to CPU, output from bridge)  */
+/*        IPIPE -> DSO    (serial data out from CPU, input to bridge)  */
+/*        FREEZE indicates CPU has entered BDM (input to bridge)       */
 /* ------------------------------------------------------------------ */
 
-#define BDMC_PORT     PORTA
-#define BDMC_DDR      DDRA
-#define BDMC_PIN      PINA
-#define BDMC_BIT      0
+#define DSCLK_PORT     PORTA
+#define DSCLK_DDR      DDRA
+#define DSCLK_BIT      0
 
-#define BDD_PORT      PORTA
-#define BDD_DDR       DDRA
-#define BDD_PIN       PINA
-#define BDD_BIT       1
+#define DSI_PORT       PORTA
+#define DSI_DDR        DDRA
+#define DSI_BIT        1
 
-#define BDREQ_PORT    PORTB
-#define BDREQ_DDR     DDRB
-#define BDREQ_PIN     PINB
-#define BDREQ_BIT     0
+#define DSO_PORT       PORTB
+#define DSO_DDR        DDRB
+#define DSO_PIN        PINB
+#define DSO_BIT        0
 
-#define BDMACK_PORT   PORTB
-#define BDMACK_DDR    DDRB
-#define BDMACK_PIN    PINB
-#define BDMACK_BIT    1
+#define FREEZE_PORT    PORTB
+#define FREEZE_DDR     DDRB
+#define FREEZE_PIN     PINB
+#define FREEZE_BIT     1
 
 #define TARGET_RESET_PORT  PORTA
 #define TARGET_RESET_DDR   DDRA
@@ -57,7 +60,7 @@
 #define BDM_TIMEOUT_MS        5000
 
 /* ------------------------------------------------------------------ */
-/*  BDM Protocol Constants (CPU32 Reference Manual)                     */
+/*  BDM Protocol Constants (CPU32 Reference Manual §7.2.8)             */
 /* ------------------------------------------------------------------ */
 
 /* 16-bit BDM opcodes */
@@ -85,10 +88,15 @@
 #define BDM_OP_SIZE_WORD      0x0008U
 #define BDM_OP_SIZE_LONG      0x0010U
 
-/* BDM status responses */
+/* BDM status responses (bit 16 of 17-bit word, from DSO) */
+#define BDM_STATUS_READY      0    /* DSO bit 16 = 0, response valid */
+#define BDM_STATUS_NOT_READY  1    /* DSO bit 16 = 1, CPU busy */
+
+/* 16-bit status word values returned in data field */
+/* Per CPU32 RM: bit 15 set = bus error */
 #define BDM_STATUS_OK         0x0FFFFU
-#define BDM_STATUS_BERR       0x10001U
-#define BDM_STATUS_NOT_READY  0x00000U
+#define BDM_STATUS_BERR       0x8001U
+#define BDM_STATUS_NOT_READY_RESP  0x00000U
 #define BDM_STATUS_ILLEGAL    0x00001U
 
 /* Register class (for RAREG/WAREG) */
@@ -96,6 +104,7 @@
 #define BDM_REG_CLASS_ADDR    0x0004U
 
 /* System register select codes (RSREG/WSREG, bits [6:3]) */
+/* Values are pre-shifted, OR directly with opcode base */
 #define BDM_SR_RPC            0x0000U
 #define BDM_SR_PCC            0x0008U
 #define BDM_SR_SR             0x002CU

@@ -55,13 +55,17 @@ typedef enum {
 void     bdm_init(void);
 
 /* ------------------------------------------------------------------ */
-/*  Low-level serial protocol                                          */
+/*  Low-level serial protocol (CPU32 §7.2.7)                           */
+/*      17-bit full-duplex words: 16 data bits + 1 status bit (DSO)   */
+/*      DSCLK on BKPT, DSI on IFETCH, DSO on IPIPE                   */
 /* ------------------------------------------------------------------ */
 
-bool     bdm_send_preamble(void);
-bool     bdm_shift_word(uint16_t out, uint16_t *in);
-bool     bdm_shift_byte(uint8_t out, uint8_t *in);
-bool     bdm_read_status(uint16_t *status);
+/* Shift a 16-bit word. poll=true waits for CPU ready (DSO bit 16 = 0).
+   Returns the 16-bit data read from DSO. */
+uint16_t bdm_shift_word(uint16_t out, bool poll);
+
+/* Poll until CPU indicates ready (DSO bit 16 = 0), discarding data words. */
+bool     bdm_poll_ready(void);
 
 /* ------------------------------------------------------------------ */
 /*  Memory access                                                      */

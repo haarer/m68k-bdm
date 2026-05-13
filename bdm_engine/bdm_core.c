@@ -11,133 +11,166 @@
 /* ------------------------------------------------------------------ */
 
 static bool in_bdm_mode = false;
+static uint16_t last_status_word = 0;
 
 /* ------------------------------------------------------------------ */
-/*  Pin helpers                                                        */
+/*  Status helpers                                                     */
 /* ------------------------------------------------------------------ */
 
-static inline void bdm_clock_high(void)
+static inline bool bdm_status_is_error(uint16_t status)
 {
-    BDMC_PORT |=  (1 << BDMC_BIT);
-}
-
-static inline void bdm_clock_low(void)
-{
-    BDMC_PORT &= ~(1 << BDMC_BIT);
-}
-
-static inline void bdm_data_high(void)
-{
-    BDD_PORT |=  (1 << BDD_BIT);
-}
-
-static inline void bdm_data_low(void)
-{
-    BDD_PORT &= ~(1 << BDD_BIT);
-}
-
-static inline bool bdm_read_data(void)
-{
-    return (BDD_PIN & (1 << BDD_BIT)) != 0;
-}
-
-static inline bool bdm_read_ack(void)
-{
-    return (BDMACK_PIN & (1 << BDMACK_BIT)) != 0;
-}
-
-static inline void bdm_set_data_output(void)
-{
-    BDD_DDR |= (1 << BDD_BIT);
-}
-
-static inline void bdm_set_data_input(void)
-{
-    BDD_DDR &= ~(1 << BDD_BIT);
+    return (status == (uint16_t)BDM_STATUS_BERR ||
+            status == (uint16_t)BDM_STATUS_ILLEGAL);
 }
 
 /* ------------------------------------------------------------------ */
-/*  16-bit word shift (MSB first, bit 16 = ACK from target)            */
+/*  Pin helpers (CPU32 §7.2.7)                                         */
 /* ------------------------------------------------------------------ */
 
-bool bdm_shift_word(uint16_t out, uint16_t *in)
+static inline void dsclk_high(void)
 {
-    uint16_t result = 0;
+    DSCLK_PORT |=  (1 << DSCLK_BIT);
+}
 
-    for (uint8_t bit = 0; bit < 16; bit++) {
-        bdm_clock_low();
-        bdm_delay_half_period();
+static inline void dsclk_low(void)
+{
+    DSCLK_PORT &= ~(1 << DSCLK_BIT);
+}
 
-        if (bit < 15) {
-            bdm_set_data_output();
+static inline void dsi_high(void)
+{
+    DSI_PORT |=  (1 << DSI_BIT);
+}
+
+static inline void dsi_low(void)
+{
+    DSI_PORT &= ~(1 << DSI_BIT);
+}
+
+static inline bool dso_read(void)
+{
+    return (DSO_PIN & (1 << DSO_BIT)) != 0;
+}
+
+static inline bool freeze_read(void)
+{
+    return (FREEZE_PIN & (1 << FREEZE_BIT)) != 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  17-bit full-duplex word shift (CPU32 §7.2.7)                       */
+/*      16 data bits + 1 status bit (bit 16) on DSO.                  */
+/*      Data transitions on falling edge of DSCLK,                    */
+/*      stable by rising edge, latched on rising edge.                */
+/*      MSB first.                                                    */
+/* ------------------------------------------------------------------ */
+
+uint16_t bdm_shift_word(uint16_t out, bool poll)
+{
+    cli();
+
+    uint16_t data_in  = 0;
+    uint8_t  status16 = 0;
+
+    for (uint8_t bit = 0; bit < 17; bit++) {
+        /* Data transitions on falling edge: set DSI before clock goes low */
+        if (bit < 16) {
             if (out & (1 << (15 - bit)))
-                bdm_data_high();
+                dsi_high();
             else
-                bdm_data_low();
-        } else {
-            bdm_set_data_input();
+                dsi_low();
         }
 
-        bdm_clock_high();
+        dsclk_low();
         bdm_delay_half_period();
 
-        if (bit == 15) {
-            result = bdm_read_data() ? 0x8000U : 0x0000U;
+        /* Rising edge: CPU latches DSI, we sample DSO */
+        dsclk_high();
+        bdm_delay_half_period();
+
+        if (bit < 16) {
+            data_in |= (uint16_t)(dso_read() << (15 - bit));
+        } else {
+            /* Bit 16 = status/control from DSO */
+            status16 = dso_read() ? 1U : 0U;
         }
     }
 
-    bdm_set_data_output();
+    /* Per spec: DSCLK remains high between transfers */
 
-    if (in)
-        *in = result;
+    if (poll) {
+        if (status16 == BDM_STATUS_READY) {
+            last_status_word = data_in;
+        }
+        sei();
+        return (status16 == BDM_STATUS_READY) ? data_in : 0xFFFFU;
+    }
 
-    return true;
-}
-
-/* Byte shift wrapper (shifts as 16-bit word with upper byte zeroed) */
-bool bdm_shift_byte(uint8_t out, uint8_t *in)
-{
-    uint16_t wout = (uint16_t)out;
-    uint16_t win = 0;
-
-    if (!bdm_shift_word(wout, &win))
-        return false;
-
-    if (in)
-        *in = (uint8_t)win;
-
-    return true;
+    sei();
+    return data_in;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Preamble                                                           */
+/*  Poll until CPU ready (DSO bit 16 = 0)                              */
+/*      CPU holds DSO high ("not ready") until response is valid.      */
+/*      We send zero words and clock until DSO bit 16 goes low.        */
+/*      The 16-bit data word accompanying bit16=0 is the status word.  */
+/* ------------------------------------------------------------------ */
+
+bool bdm_poll_ready(void)
+{
+    bdm_timeout_start();
+
+    for (uint16_t i = 0; i < 10000; i++) {
+        cli();
+        uint16_t data_in  = 0;
+        uint8_t  status16 = 0;
+
+        for (uint8_t bit = 0; bit < 17; bit++) {
+            dsi_low();
+            dsclk_low();
+            bdm_delay_half_period();
+            dsclk_high();
+            bdm_delay_half_period();
+            if (bit < 16)
+                data_in |= (uint16_t)(dso_read() << (15 - bit));
+            else
+                status16 = dso_read() ? 1U : 0U;
+        }
+        sei();
+
+        if (status16 == BDM_STATUS_READY) {
+            last_status_word = data_in;
+            return true;
+        }
+        if (bdm_timeout_exceeded())
+            break;
+    }
+
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Preamble (CPU32 §7.2.3, §7.2.7.2)                                 */
+/*      Assert BKPT (DSCLK line low), wait for FREEZE, then clock.    */
 /* ------------------------------------------------------------------ */
 
 bool bdm_send_preamble(void)
 {
     cli();
 
-    bdm_set_data_output();
-    bdm_data_high();
-    bdm_clock_low();
+    /* Assert BKPT by holding DSCLK low */
+    dsclk_low();
+    dsi_high();
 
     bdm_delay_full_period();
 
-    /* 8 clock cycles with BDD high */
-    for (uint8_t i = 0; i < 8; i++) {
-        bdm_clock_high();
-        bdm_delay_half_period();
-        bdm_clock_low();
-        bdm_delay_half_period();
-    }
-
-    bdm_set_data_input();
-
-    /* Wait for BDMACK with timeout */
+    /* Wait for FREEZE to be asserted (active low on most boards) */
     bdm_timeout_start();
 
     for (uint16_t i = 0; i < 1000; i++) {
-        if (bdm_read_ack()) {
+        if (!freeze_read()) {
+            /* CPU has entered BDM, FREEZE asserted */
             sei();
             in_bdm_mode = true;
             return true;
@@ -153,25 +186,17 @@ bool bdm_send_preamble(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status read (after command completes)                              */
+/*  Status check after command                                         */
+/*      After sending a command, poll for ready. The 16-bit data       */
+/*      word accompanying bit16=0 is the status word from the CPU.     */
 /* ------------------------------------------------------------------ */
 
-bool bdm_read_status(uint16_t *status)
+static bool bdm_check_status(void)
 {
-    uint16_t ack = 0;
-    if (!bdm_shift_word(0x0000U, &ack))
+    if (!bdm_poll_ready())
         return false;
 
-    if (status)
-        *status = ack;
-
-    return true;
-}
-
-/* Check if status indicates BERR/AERR error (bit 15 set) */
-static inline bool bdm_status_is_error(uint16_t status)
-{
-    return (status & 0x8000U) != 0;
+    return !bdm_status_is_error(last_status_word);
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,12 +206,10 @@ static inline bool bdm_status_is_error(uint16_t status)
 bdm_result_t bdm_read_memory(uint32_t addr, uint8_t size, uint32_t *data)
 {
     uint16_t opcode;
-    uint16_t ack = 0;
 
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    /* Build opcode with size */
     switch (size) {
     case BDM_SIZE_WORD:
         opcode = BDM_OPCODE_READ | BDM_OP_SIZE_WORD;
@@ -200,36 +223,34 @@ bdm_result_t bdm_read_memory(uint32_t addr, uint8_t size, uint32_t *data)
         break;
     }
 
-    /* Send opcode */
-    bdm_shift_word(opcode, NULL);
+    /* Send opcode word */
+    bdm_shift_word(opcode, false);
 
     /* Send 32-bit address (MSW first) */
-    bdm_shift_word((uint16_t)(addr >> 16), NULL);
-    bdm_shift_word((uint16_t)(addr & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(addr >> 16), false);
+    bdm_shift_word((uint16_t)(addr & 0xFFFFU), false);
 
-    /* Read result data */
+    /* Poll for CPU ready, then read result data */
+    if (!bdm_poll_ready())
+        return BDM_ERR_TIMEOUT;
+
     if (size == BDM_SIZE_LONG) {
-        uint16_t hi, lo;
-        bdm_shift_word(0, &hi);
-        bdm_shift_word(0, &lo);
+        uint16_t hi = bdm_shift_word(0, false);
+        uint16_t lo = bdm_shift_word(0, false);
         if (data)
             *data = ((uint32_t)hi << 16) | (uint32_t)lo;
     } else if (size == BDM_SIZE_WORD) {
-        uint16_t val = 0;
-        bdm_shift_word(0, &val);
+        uint16_t val = bdm_shift_word(0, false);
         if (data)
             *data = (uint32_t)val;
     } else {
-        uint16_t val = 0;
-        bdm_shift_word(0, &val);
+        uint16_t val = bdm_shift_word(0, false);
         if (data)
             *data = (uint32_t)(val & 0xFF);
     }
 
-    /* Read status */
-    bdm_read_status(&ack);
-
-    if (bdm_status_is_error(ack))
+    /* Check status */
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -241,12 +262,10 @@ bdm_result_t bdm_read_memory(uint32_t addr, uint8_t size, uint32_t *data)
 bdm_result_t bdm_write_memory(uint32_t addr, uint8_t size, uint32_t data)
 {
     uint16_t opcode;
-    uint16_t ack = 0;
 
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    /* Build opcode with size */
     switch (size) {
     case BDM_SIZE_WORD:
         opcode = BDM_OPCODE_WRITE | BDM_OP_SIZE_WORD;
@@ -260,27 +279,25 @@ bdm_result_t bdm_write_memory(uint32_t addr, uint8_t size, uint32_t data)
         break;
     }
 
-    /* Send opcode */
-    bdm_shift_word(opcode, NULL);
+    /* Send opcode word */
+    bdm_shift_word(opcode, false);
 
     /* Send 32-bit address (MSW first) */
-    bdm_shift_word((uint16_t)(addr >> 16), NULL);
-    bdm_shift_word((uint16_t)(addr & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(addr >> 16), false);
+    bdm_shift_word((uint16_t)(addr & 0xFFFFU), false);
 
     /* Send data */
     if (size == BDM_SIZE_LONG) {
-        bdm_shift_word((uint16_t)(data >> 16), NULL);
-        bdm_shift_word((uint16_t)(data & 0xFFFFU), NULL);
+        bdm_shift_word((uint16_t)(data >> 16), false);
+        bdm_shift_word((uint16_t)(data & 0xFFFFU), false);
     } else if (size == BDM_SIZE_WORD) {
-        bdm_shift_word((uint16_t)data, NULL);
+        bdm_shift_word((uint16_t)data, false);
     } else {
-        bdm_shift_word((uint16_t)data, NULL);
+        bdm_shift_word((uint16_t)data, false);
     }
 
-    /* Read status */
-    bdm_read_status(&ack);
-
-    if (bdm_status_is_error(ack))
+    /* Check status */
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -291,8 +308,6 @@ bdm_result_t bdm_write_memory(uint32_t addr, uint8_t size, uint32_t data)
 
 bdm_result_t bdm_dump_memory(uint32_t addr, uint8_t size, uint8_t count, uint32_t *data)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
@@ -321,29 +336,28 @@ bdm_result_t bdm_dump_memory(uint32_t addr, uint8_t size, uint8_t count, uint32_
             break;
         }
 
-        bdm_shift_word(opcode, NULL);
+        bdm_shift_word(opcode, false);
 
-        /* Read result */
+        /* Poll for ready, then read result */
+        if (!bdm_poll_ready())
+            return BDM_ERR_TIMEOUT;
+
         if (size == BDM_SIZE_LONG) {
-            uint16_t hi, lo;
-            bdm_shift_word(0, &hi);
-            bdm_shift_word(0, &lo);
+            uint16_t hi = bdm_shift_word(0, false);
+            uint16_t lo = bdm_shift_word(0, false);
             if (data)
                 data[i] = ((uint32_t)hi << 16) | (uint32_t)lo;
         } else if (size == BDM_SIZE_WORD) {
-            uint16_t val = 0;
-            bdm_shift_word(0, &val);
+            uint16_t val = bdm_shift_word(0, false);
             if (data)
                 data[i] = (uint32_t)val;
         } else {
-            uint16_t val = 0;
-            bdm_shift_word(0, &val);
+            uint16_t val = bdm_shift_word(0, false);
             if (data)
                 data[i] = (uint32_t)(val & 0xFF);
         }
 
-        bdm_read_status(&ack);
-        if (bdm_status_is_error(ack))
+        if (!bdm_check_status())
             return BDM_ERR_BERR;
     }
 
@@ -356,8 +370,6 @@ bdm_result_t bdm_dump_memory(uint32_t addr, uint8_t size, uint8_t count, uint32_
 
 bdm_result_t bdm_fill_memory(uint32_t addr, uint8_t size, uint32_t data, uint8_t count)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
@@ -385,18 +397,17 @@ bdm_result_t bdm_fill_memory(uint32_t addr, uint8_t size, uint32_t data, uint8_t
             break;
         }
 
-        bdm_shift_word(opcode, NULL);
+        bdm_shift_word(opcode, false);
 
         /* Send data */
         if (size == BDM_SIZE_LONG) {
-            bdm_shift_word((uint16_t)(data >> 16), NULL);
-            bdm_shift_word((uint16_t)(data & 0xFFFFU), NULL);
+            bdm_shift_word((uint16_t)(data >> 16), false);
+            bdm_shift_word((uint16_t)(data & 0xFFFFU), false);
         } else {
-            bdm_shift_word((uint16_t)data, NULL);
+            bdm_shift_word((uint16_t)data, false);
         }
 
-        bdm_read_status(&ack);
-        if (bdm_status_is_error(ack))
+        if (!bdm_check_status())
             return BDM_ERR_BERR;
     }
 
@@ -409,23 +420,22 @@ bdm_result_t bdm_fill_memory(uint32_t addr, uint8_t size, uint32_t data, uint8_t
 
 bdm_result_t bdm_read_data_reg(uint8_t reg, uint32_t *value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_RAREG | BDM_REG_CLASS_DATA | (reg & 0x07);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
-    /* Read 32-bit value (MSW first) */
-    uint16_t hi = 0, lo = 0;
-    bdm_shift_word(0, &hi);
-    bdm_shift_word(0, &lo);
+    /* Poll for ready, then read 32-bit value (MSW first) */
+    if (!bdm_poll_ready())
+        return BDM_ERR_TIMEOUT;
+
+    uint16_t hi = bdm_shift_word(0, false);
+    uint16_t lo = bdm_shift_word(0, false);
     if (value)
         *value = ((uint32_t)hi << 16) | (uint32_t)lo;
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -436,20 +446,17 @@ bdm_result_t bdm_read_data_reg(uint8_t reg, uint32_t *value)
 
 bdm_result_t bdm_write_data_reg(uint8_t reg, uint32_t value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_WAREG | BDM_REG_CLASS_DATA | (reg & 0x07);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
     /* Send 32-bit value (MSW first) */
-    bdm_shift_word((uint16_t)(value >> 16), NULL);
-    bdm_shift_word((uint16_t)(value & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(value >> 16), false);
+    bdm_shift_word((uint16_t)(value & 0xFFFFU), false);
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -460,23 +467,22 @@ bdm_result_t bdm_write_data_reg(uint8_t reg, uint32_t value)
 
 bdm_result_t bdm_read_addr_reg(uint8_t reg, uint32_t *value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_RAREG | BDM_REG_CLASS_ADDR | (reg & 0x07);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
-    /* Read 32-bit value (MSW first) */
-    uint16_t hi = 0, lo = 0;
-    bdm_shift_word(0, &hi);
-    bdm_shift_word(0, &lo);
+    /* Poll for ready, then read 32-bit value (MSW first) */
+    if (!bdm_poll_ready())
+        return BDM_ERR_TIMEOUT;
+
+    uint16_t hi = bdm_shift_word(0, false);
+    uint16_t lo = bdm_shift_word(0, false);
     if (value)
         *value = ((uint32_t)hi << 16) | (uint32_t)lo;
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -487,20 +493,17 @@ bdm_result_t bdm_read_addr_reg(uint8_t reg, uint32_t *value)
 
 bdm_result_t bdm_write_addr_reg(uint8_t reg, uint32_t value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_WAREG | BDM_REG_CLASS_ADDR | (reg & 0x07);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
     /* Send 32-bit value (MSW first) */
-    bdm_shift_word((uint16_t)(value >> 16), NULL);
-    bdm_shift_word((uint16_t)(value & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(value >> 16), false);
+    bdm_shift_word((uint16_t)(value & 0xFFFFU), false);
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -511,23 +514,22 @@ bdm_result_t bdm_write_addr_reg(uint8_t reg, uint32_t value)
 
 bdm_result_t bdm_read_sysreg(uint8_t select, uint32_t *value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_RSREG | (select << 3);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
-    /* Read 32-bit value (MSW first) */
-    uint16_t hi = 0, lo = 0;
-    bdm_shift_word(0, &hi);
-    bdm_shift_word(0, &lo);
+    /* Poll for ready, then read 32-bit value (MSW first) */
+    if (!bdm_poll_ready())
+        return BDM_ERR_TIMEOUT;
+
+    uint16_t hi = bdm_shift_word(0, false);
+    uint16_t lo = bdm_shift_word(0, false);
     if (value)
         *value = ((uint32_t)hi << 16) | (uint32_t)lo;
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -538,20 +540,17 @@ bdm_result_t bdm_read_sysreg(uint8_t select, uint32_t *value)
 
 bdm_result_t bdm_write_sysreg(uint8_t select, uint32_t value)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
     uint16_t opcode = BDM_OPCODE_WSREG | (select << 3);
-    bdm_shift_word(opcode, NULL);
+    bdm_shift_word(opcode, false);
 
     /* Send 32-bit value (MSW first) */
-    bdm_shift_word((uint16_t)(value >> 16), NULL);
-    bdm_shift_word((uint16_t)(value & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(value >> 16), false);
+    bdm_shift_word((uint16_t)(value & 0xFFFFU), false);
 
-    bdm_read_status(&ack);
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -562,27 +561,24 @@ bdm_result_t bdm_write_sysreg(uint8_t select, uint32_t value)
 
 bdm_result_t bdm_target_reset(void)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    bdm_shift_word(BDM_OPCODE_RST, NULL);
+    bdm_shift_word(BDM_OPCODE_RST, false);
 
-    bdm_read_status(&ack);
+    if (!bdm_check_status())
+        return BDM_ERR_BERR;
 
     /* Assert hardware reset line */
     TARGET_RESET_PORT &= ~(1 << TARGET_RESET_BIT);
     bdm_delay_us(10);
     TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
 
-    if (bdm_status_is_error(ack))
-        return BDM_ERR_BERR;
     return BDM_OK;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Target Halt (external BKPT)                                        */
+/*  Target Halt (via BKPT assertion)                                   */
 /* ------------------------------------------------------------------ */
 
 bdm_result_t bdm_target_halt(void)
@@ -603,18 +599,15 @@ bdm_result_t bdm_target_halt(void)
 
 bdm_result_t bdm_target_go(void)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    bdm_shift_word(BDM_OPCODE_GO, NULL);
+    bdm_shift_word(BDM_OPCODE_GO, false);
 
-    bdm_read_status(&ack);
-    in_bdm_mode = false;
-
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
+
+    in_bdm_mode = false;
     return BDM_OK;
 }
 
@@ -624,22 +617,19 @@ bdm_result_t bdm_target_go(void)
 
 bdm_result_t bdm_call(uint32_t addr)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    bdm_shift_word(BDM_OPCODE_CALL, NULL);
+    bdm_shift_word(BDM_OPCODE_CALL, false);
 
     /* Send 32-bit address (MSW first) */
-    bdm_shift_word((uint16_t)(addr >> 16), NULL);
-    bdm_shift_word((uint16_t)(addr & 0xFFFFU), NULL);
+    bdm_shift_word((uint16_t)(addr >> 16), false);
+    bdm_shift_word((uint16_t)(addr & 0xFFFFU), false);
 
-    bdm_read_status(&ack);
-    in_bdm_mode = false;
-
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
+
+    in_bdm_mode = false;
     return BDM_OK;
 }
 
@@ -670,7 +660,6 @@ bdm_result_t bdm_step(void)
        or indexed addressing mode) */
     uint16_t opcode = (uint16_t)(instr & 0xFFFF);
     if ((opcode & 0xF000) == 0xF000) {
-        /* F-line: check for extension word */
         uint32_t ext;
         res = bdm_read_memory(pc + 2, BDM_SIZE_WORD, &ext);
         if (res == BDM_OK) {
@@ -697,15 +686,12 @@ bdm_result_t bdm_step(void)
 
 bdm_result_t bdm_nop(void)
 {
-    uint16_t ack = 0;
-
     if (!bdm_send_preamble())
         return BDM_ERR_NO_TARGET;
 
-    bdm_shift_word(BDM_OPCODE_NOP, NULL);
-    bdm_read_status(&ack);
+    bdm_shift_word(BDM_OPCODE_NOP, false);
 
-    if (bdm_status_is_error(ack))
+    if (!bdm_check_status())
         return BDM_ERR_BERR;
     return BDM_OK;
 }
@@ -725,14 +711,14 @@ bool bdm_in_bdm_mode(void)
 
 void bdm_init(void)
 {
-    BDMC_DDR       |=  (1 << BDMC_BIT);
-    BDD_DDR        |=  (1 << BDD_BIT);
-    BDREQ_DDR      &= ~(1 << BDREQ_BIT);
-    BDMACK_DDR     &= ~(1 << BDMACK_BIT);
+    DSCLK_DDR      |=  (1 << DSCLK_BIT);
+    DSI_DDR        |=  (1 << DSI_BIT);
+    FREEZE_DDR     &= ~(1 << FREEZE_BIT);
+    DSO_DDR        &= ~(1 << DSO_BIT);
     TARGET_RESET_DDR |= (1 << TARGET_RESET_BIT);
 
-    BDMC_PORT      &= ~(1 << BDMC_BIT);
-    BDD_PORT       &= ~(1 << BDD_BIT);
+    DSCLK_PORT     |=  (1 << DSCLK_BIT);
+    DSI_PORT       &= ~(1 << DSI_BIT);
     TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
 
     in_bdm_mode = false;
