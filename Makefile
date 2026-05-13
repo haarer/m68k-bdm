@@ -87,4 +87,10 @@ test-deps: $(VENV)/bin/python3
 test: test-deps
 	$(PYTHON) tests/test_bdm_bridge.py
 
-.PHONY: all clean flash eeprom fuse size disasm upload test test-deps
+cli: test-deps
+	@$(PYTHON) bdm_cli.py
+
+cli-port: test-deps
+	@$(PYTHON) bdm_cli.py -p $(PORT) -b $(BAUD)
+
+.PHONY: all clean flash eeprom fuse size disasm upload test test-deps cli cli-port

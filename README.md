@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project implements a hardware debug bridge that connects a GNU toolchain on a Linux host to a Motorola CPU32 target (MC68331) via the Background Debug Mode (BDM) protocol. The bridge firmware runs on an AVR microcontroller, translating between a serial interface toward the host PC and the BDM bus toward the target.
+This project implements a hardware debug bridge that connects a GNU toolchain on a Linux host to a Motorola CPU32 target (MC68331) via the Background Debug Mode (BDM) protocol. The bridge firmware runs on an AVR microcontroller, translating between a serial interface toward the host PC and the BDM bus toward the target. An interactive Python CLI tool (`bdm_cli.py`) provides a command-line interface for sending BDM commands to the bridge.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ This project implements a hardware debug bridge that connects a GNU toolchain on
 ┌──────────────┐        Serial (UART)        ┌──────────────┐        BDM Bus      ┌──────────────┐
 │  Linux Host  │ ◄────────────────────────►  │  AVR Bridge  │ ◄────────────────►  │  MC68331     │
 │              │  Custom command protocol    │  Firmware    │  BDM protocol       │  (Target)    │
-│  Host Tool   │                             │              │                     │              │
+│  bdm_cli.py  │                             │              │                     │              │
 └──────────────┘                             └──────────────┘                     └──────────────┘
 ```
 
@@ -38,7 +38,16 @@ The firmware running on the AVR microcontroller performs the following functions
   - Assembles and disassembles BDM frames with proper bit-banging
   - Handles acknowledgment, error detection, and retry logic
 
-### 2. Hardware
+### 2. Host CLI Tool
+
+`bdm_cli.py` is an interactive Python tool that communicates with the bridge over serial:
+
+- **Command Interface** — Readline-based REPL with tab completion and command history
+- **All BDM Commands** — Memory read/write/dump/fill, register access, target control
+- **Raw Mode** — Send arbitrary command bytes for protocol experimentation
+- **Human-Readable Output** — Response codes decoded to names, memory dumps formatted with addresses
+
+### 3. Hardware
 
 - **AVR Microcontroller**
   - Target AVR: ATmega2560 (Arduino Mega 2560)
@@ -219,6 +228,7 @@ XOR checksum covers all bytes from STX through payload (inclusive), excluding th
 .
 ├── main.c              - Entry point, command dispatch
 ├── config.h            - Board, pin, timing, and protocol configuration
+├── bdm_cli.py          - Interactive CLI tool for sending BDM commands
 ├── Makefile            - Build system
 ├── bdm_engine/         - BDM protocol implementation
 │   ├── bdm_core.c/h    - Frame assembly/disassembly, BDM state machine
@@ -274,6 +284,71 @@ The test suite sends real frames to the bridge over serial and validates every r
 **BDM commands** (return `RSP_TARGET_ERROR` without target): MEM_READ, MEM_WRITE, REG_READ, REG_WRITE, SYSREG_READ, SYSREG_WRITE, MEM_DUMP, MEM_FILL, TARGET_RESET, TARGET_HALT, TARGET_GO, STEP, CALL
 **Protocol edge cases**: unknown command returns `RSP_NOT_SUPPORTED`, short payload returns `RSP_ERROR`, rapid-fire commands, response framing validation
 
+## Interactive CLI
+
+`bdm_cli.py` provides a readline-based REPL for sending BDM commands to the bridge interactively. It supports tab completion, hex input (`0x` or `$` prefix), and human-readable output.
+
+### Launching
+
+```sh
+# Default port (/dev/ttyACM0) and baud (115200)
+python3 bdm_cli.py
+
+# Custom port and baud
+python3 bdm_cli.py -p /dev/ttyUSB0 -b 57600
+
+# Via Makefile
+make cli-port PORT=/dev/ttyACM0 BAUD=115200
+```
+
+### Command Reference
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `enable` | — | Enable BDM via §7.2.1 reset sequence |
+| `status` | — | Query bridge and target status |
+| `config` | — | Configure bridge parameters |
+| `halt` | — | Halt target execution |
+| `go` | — | Resume target execution |
+| `reset` | — | Reset target |
+| `step` | — | Single-step target |
+| `mread` | `ADDR [COUNT] [SIZE]` | Read memory (SIZE: 1=byte, 2=word, 4=long) |
+| `mwrite` | `ADDR DATA...` | Write memory (comma-separated hex bytes) |
+| `mdump` | `ADDR [COUNT] [SIZE]` | Dump memory block with addresses |
+| `mfill` | `ADDR COUNT VALUE [SIZE]` | Fill memory block |
+| `regread` | `REG` | Read data (0-7) or address (8-15) register |
+| `regwrite` | `REG VALUE` | Write data or address register |
+| `sysregread` | `SEL` | Read system register (RPC, PCC, SR, etc.) |
+| `sysregwrite` | `SEL VALUE` | Write system register |
+| `call` | `ADDR` | Call target code at address |
+| `bpset` | `ADDR` | Set hardware breakpoint |
+| `bpclr` | `ADDR` | Clear hardware breakpoint |
+| `raw` | `CMD [DATA...]` | Send raw command byte with optional data |
+
+### Example Session
+
+```
+bdm> status
+Target in normal mode [OK]
+
+bdm> mread 0x1000 4 4
+mread 0x00001000 = 0x00000000 [TARGET_ERROR]
+
+bdm> sysregread 0
+RPC = 0x00000000 [TARGET_ERROR]
+
+bdm> quit
+Disconnected.
+```
+
+### Features
+
+- **Tab completion** — Press Tab to autocomplete command names
+- **Hex input** — Accepts `0x1234`, `$1234`, or plain decimal
+- **Memory dump formatting** — `mdump` shows address-value pairs
+- **Register names** — Registers displayed as `D0`-`D7`, `A0`-`A7`, `RPC`, `PCC`, etc.
+- **Raw commands** — `raw` sends arbitrary command bytes for experimentation
+
 ## Development Environment
 
 ### AVR Toolchain (Bridge Firmware)
@@ -324,6 +399,8 @@ The flash target uses the `-D` flag to skip chip erase, which avoids erase failu
 | eeprom     | Flash EEPROM image                    |
 | fuse       | Set fuse bytes (0xD2/0xFF)           |
 | test       | Run Python test suite                 |
+| cli        | Launch interactive BDM CLI            |
+| cli-port   | Launch CLI with PORT/BAUD overrides   |
 | disasm     | Generate disassembly listing          |
 | clean      | Remove build artifacts                |
 
@@ -363,6 +440,7 @@ make eeprom
 - Memory access speed constrained by synchronous BDM protocol
 - Breakpoint commands return OK but don't use hardware breakpoint support
 - MC68331 target-specific extensions (peripheral debug) not yet implemented
+- `bdm_cli.py` is a standalone interactive tool; GDB stub integration is not yet implemented
 
 ## References
 
