@@ -38,6 +38,7 @@ static inline void hal_delay_us(uint16_t us)
 
 void     hal_serial_init(uint32_t baud);
 void     hal_serial_putc(char c);
+int      hal_serial_try_putc(char c);  /* Non-blocking: returns 1 on success, 0 if TX busy */
 char     hal_serial_getc(void);
 int      hal_serial_has_data(void);
 void     hal_serial_flush(void);

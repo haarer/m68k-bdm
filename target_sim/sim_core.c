@@ -3,6 +3,7 @@
 #include "hal.h"
 #include "sim_bdm.h"
 #include "sim_core.h"
+#include "sim_debug.h"
 
 /* ------------------------------------------------------------------ */
 /*  Register File                                                      */
@@ -130,6 +131,7 @@ static void check_bdm_entry(void)
             atemp = 0x00000002;  /* External BKPT entry source */
             rpc = pcc;           /* Save current PC to RPC */
             sim_bdm_assert_freeze();
+            dbg_event(DBG_BDM_ENTRY, 0, pcc, 0);
         }
     }
 
@@ -165,6 +167,7 @@ static uint16_t exec_opcode(uint16_t opcode, uint32_t *result_hi, uint32_t *resu
     case OP_GO:
         /* Resume execution — exit BDM mode */
         status = STATUS_OK;
+        dbg_event(DBG_BDM_EXIT, opcode, pcc, 0);
         in_bdm_mode = false;
         sim_bdm_deassert_freeze();
         break;
@@ -189,6 +192,7 @@ static uint16_t exec_opcode(uint16_t opcode, uint32_t *result_hi, uint32_t *resu
             /* Read register */
             *result_hi = (*reg >> 16) & 0xFFFF;
             *result_lo = *reg & 0xFFFF;
+            dbg_event(DBG_REG_READ, opcode, reg_num | (reg_class ? 0x100 : 0), *reg);
         } else {
             /* Write register — value sent in next words */
             /* Caller handles this */
@@ -220,6 +224,8 @@ static uint16_t exec_opcode(uint16_t opcode, uint32_t *result_hi, uint32_t *resu
             }
             *result_hi = (val >> 16) & 0xFFFF;
             *result_lo = val & 0xFFFF;
+            if (status != STATUS_ILLEGAL)
+                dbg_event(DBG_REG_READ, opcode, select, val);
         } else {
             /* Write system register — value sent in next words */
             /* Caller handles this */
@@ -237,14 +243,17 @@ static uint16_t exec_opcode(uint16_t opcode, uint32_t *result_hi, uint32_t *resu
             *result_hi = mem_read_long(addr) >> 16;
             *result_lo = mem_read_long(addr) & 0xFFFF;
             addr_ptr += 4;
+            dbg_event(DBG_MEM_READ, opcode, addr, (*result_hi << 16) | *result_lo);
         } else if (size == SIZE_WORD) {
             *result_hi = 0;
             *result_lo = mem_read_word(addr);
             addr_ptr += 2;
+            dbg_event(DBG_MEM_READ, opcode, addr, *result_lo);
         } else {
             *result_hi = 0;
             *result_lo = mem_read_byte(addr);
             addr_ptr += 1;
+            dbg_event(DBG_MEM_READ, opcode, addr, *result_lo);
         }
         break;
     }
@@ -287,6 +296,7 @@ static uint16_t exec_opcode(uint16_t opcode, uint32_t *result_hi, uint32_t *resu
 
     default:
         status = STATUS_ILLEGAL;
+        dbg_event(DBG_ERROR, opcode, 0, 0);
         break;
     }
 
@@ -327,6 +337,7 @@ bool sim_core_run(void)
         uint16_t addr_hi = sim_bdm_shift_word(0, false);
         uint16_t addr_lo = sim_bdm_shift_word(0, false);
         pcc = ((uint32_t)addr_hi << 16) | addr_lo;
+        dbg_event(DBG_BDM_EXIT, opcode, pcc, 0);
         break;
     }
 
@@ -356,6 +367,7 @@ bool sim_core_run(void)
                 a_regs[reg_num] = val;
             else
                 d_regs[reg_num] = val;
+            dbg_event(DBG_REG_WRITE, opcode, reg_num | (reg_class ? 0x100 : 0), val);
         } else {
             uint8_t select = (detail >> 3) & 0x0F;
             switch (select) {
@@ -370,6 +382,7 @@ bool sim_core_run(void)
             case 0x08: sfc = (uint8_t)val; break;
             case 0x09: dfc = (uint8_t)val; break;
             }
+            dbg_event(DBG_REG_WRITE, opcode, select, val);
         }
         sim_bdm_shift_word(status, true);
         break;
@@ -406,20 +419,25 @@ bool sim_core_run(void)
 
         /* Read data and write to memory */
         uint16_t size = detail & 0x0018;
+        uint32_t data_val = 0;
         if (size == SIZE_LONG) {
             uint16_t d_hi = sim_bdm_shift_word(0, false);
             uint16_t d_lo = sim_bdm_shift_word(0, false);
-            mem_write_long(addr_ptr, ((uint32_t)d_hi << 16) | d_lo);
+            data_val = ((uint32_t)d_hi << 16) | d_lo;
+            mem_write_long(addr_ptr, data_val);
             addr_ptr += 4;
         } else if (size == SIZE_WORD) {
             uint16_t d = sim_bdm_shift_word(0, false);
+            data_val = d;
             mem_write_word(addr_ptr, d);
             addr_ptr += 2;
         } else {
             uint16_t d = sim_bdm_shift_word(0, false);
+            data_val = d;
             mem_write_byte(addr_ptr, (uint8_t)d);
             addr_ptr += 1;
         }
+        dbg_event(DBG_MEM_WRITE, opcode, addr_ptr - (size == SIZE_LONG ? 4 : size == SIZE_WORD ? 2 : 1), data_val);
         sim_bdm_shift_word(status, true);
         break;
     }
@@ -442,20 +460,25 @@ bool sim_core_run(void)
     {
         /* Read data and write to memory */
         uint16_t size = detail & 0x0018;
+        uint32_t data_val = 0;
         if (size == SIZE_LONG) {
             uint16_t d_hi = sim_bdm_shift_word(0, false);
             uint16_t d_lo = sim_bdm_shift_word(0, false);
-            mem_write_long(addr_ptr, ((uint32_t)d_hi << 16) | d_lo);
+            data_val = ((uint32_t)d_hi << 16) | d_lo;
+            mem_write_long(addr_ptr, data_val);
             addr_ptr += 4;
         } else if (size == SIZE_WORD) {
             uint16_t d = sim_bdm_shift_word(0, false);
+            data_val = d;
             mem_write_word(addr_ptr, d);
             addr_ptr += 2;
         } else {
             uint16_t d = sim_bdm_shift_word(0, false);
+            data_val = d;
             mem_write_byte(addr_ptr, (uint8_t)d);
             addr_ptr += 1;
         }
+        dbg_event(DBG_MEM_WRITE, opcode, addr_ptr - (size == SIZE_LONG ? 4 : size == SIZE_WORD ? 2 : 1), data_val);
         sim_bdm_shift_word(status, true);
         break;
     }

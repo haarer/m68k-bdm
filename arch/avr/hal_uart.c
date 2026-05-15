@@ -31,6 +31,14 @@ void hal_serial_putc(char c)
     UDR0 = c;
 }
 
+int hal_serial_try_putc(char c)
+{
+    if (!(UCSR0A & (1 << UDRE0)))
+        return 0;
+    UDR0 = c;
+    return 1;
+}
+
 char hal_serial_getc(void)
 {
     uint8_t data = 0;

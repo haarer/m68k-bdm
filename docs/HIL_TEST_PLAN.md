@@ -25,14 +25,17 @@ This document describes the HIL test architecture for validating the m68k-bdm br
 
 ### Physical Wiring
 
-| Bridge Pin (PA) | Target Sim Pin (PA) | Signal | Direction |
-|-----------------|---------------------|--------|-----------|
-| PA0 | PA0 | DSCLK (BDM clock) | Bridge → Target |
-| PA1 | PA1 | DSI (data in to target) | Bridge → Target |
-| PA2 | PA2 | DSO (data out from target) | Target → Bridge |
-| PA3 | PA3 | FREEZE (BDM mode indicator) | Target → Bridge |
-| PA4 | PA4 | TARGET_RESET | Bridge → Target |
-| GND | GND | Common ground | — |
+Both boards use the same pin mapping. Connect corresponding pins directly with jumper wires.
+Refer to the pinout diagram in `docs/Pinout-Diagram.png`.
+
+| Signal | GPIO | Bridge Board Pin | Target Sim Board Pin | Direction |
+|--------|------|-----------------|---------------------|-----------|
+| DSCLK (BDM clock) | PA0 | Right header, pin 7 | Right header, pin 7 | Bridge → Target |
+| DSI (data in to target) | PA1 | Right header, pin 8 | Right header, pin 8 | Bridge → Target |
+| DSO (data out from target) | PA2 | Right header, pin 9 | Right header, pin 9 | Target → Bridge |
+| FREEZE (BDM mode indicator) | PA3 | Right header, pin 10 | Right header, pin 10 | Target → Bridge |
+| TARGET_RESET | PA4 | Right header, pin 11 | Right header, pin 11 | Bridge → Target |
+| Common ground | GND | Right header, pin 2 | Right header, pin 2 | — |
 
 Both boards are 3.3V — no level shifting required.
 

@@ -80,7 +80,7 @@ else ifeq ($(VARIANT),target_sim)
 
     # Target simulator uses its own sources + shared STM32 HAL + startup
     ARCH_SRCS  := arch/stm32f1/hal_usb_cdc.c arch/stm32f1/startup_stm32f103xb.S
-    SIM_SRCS   := $(TARGET_SIM)/main.c $(TARGET_SIM)/sim_core.c $(TARGET_SIM)/sim_bdm.c
+    SIM_SRCS   := $(TARGET_SIM)/main.c $(TARGET_SIM)/sim_core.c $(TARGET_SIM)/sim_bdm.c $(TARGET_SIM)/sim_debug.c
 
     FLASH_TOOL := st-flash
     FLASH_ARGS := write

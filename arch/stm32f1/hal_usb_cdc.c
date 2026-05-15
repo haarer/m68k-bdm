@@ -480,6 +480,21 @@ void hal_serial_putc(char c)
     ep_set_stat_tx(1, USB_EP_STAT_TX_VALID);
 }
 
+int hal_serial_try_putc(char c)
+{
+    if (ep1_tx_active)
+        return 0;
+
+    ep1_tx_buf[0] = (uint8_t)c;
+    ep1_tx_len = 1;
+    ep1_tx_pos = 0;
+    ep1_tx_active = 1;
+
+    pma_write(0x40, ep1_tx_buf, 1);
+    ep_set_stat_tx(1, USB_EP_STAT_TX_VALID);
+    return 1;
+}
+
 char hal_serial_getc(void)
 {
     uint8_t data = 0;
