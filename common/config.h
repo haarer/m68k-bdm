@@ -1,53 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <avr/io.h>
 #include <stdint.h>
-
-/* ------------------------------------------------------------------ */
-/*  Board                                                              */
-/* ------------------------------------------------------------------ */
-
-#define BOARD_MEGA2560
-#define F_CPU 16000000UL
-
-/* ------------------------------------------------------------------ */
-/*  Serial (Host side - USART0)                                        */
-/* ------------------------------------------------------------------ */
-
-#define SERIAL_BAUD       115200UL
-#define SERIAL_UBRR_VALUE (F_CPU / (8 * SERIAL_BAUD) - 1)
-
-/* ------------------------------------------------------------------ */
-/*  BDM Pins (Target side - ATmega2560 port mapping)                   */
-/*      Per CPU32 Reference Manual §7.2.7:                             */
-/*        BKPT  -> DSCLK  (serial clock, output from bridge)           */
-/*        IFETCH-> DSI    (serial data in to CPU, output from bridge)  */
-/*        IPIPE -> DSO    (serial data out from CPU, input to bridge)  */
-/*        FREEZE indicates CPU has entered BDM (input to bridge)       */
-/* ------------------------------------------------------------------ */
-
-#define DSCLK_PORT     PORTF
-#define DSCLK_DDR      DDRF
-#define DSCLK_BIT      1
-
-#define DSI_PORT       PORTF
-#define DSI_DDR        DDRF
-#define DSI_BIT        0
-
-#define DSO_PORT       PORTF
-#define DSO_DDR        DDRF
-#define DSO_PIN        PINF
-#define DSO_BIT        4
-
-#define FREEZE_PORT    PORTF
-#define FREEZE_DDR     DDRF
-#define FREEZE_PIN     PINF
-#define FREEZE_BIT     3
-
-#define TARGET_RESET_PORT  PORTF
-#define TARGET_RESET_DDR   DDRF
-#define TARGET_RESET_BIT   2
 
 /* ------------------------------------------------------------------ */
 /*  BDM Timing                                                         */
@@ -93,7 +47,6 @@
 #define BDM_STATUS_NOT_READY  1    /* DSO bit 16 = 1, CPU busy */
 
 /* 16-bit status word values returned in data field */
-/* Per CPU32 RM: bit 15 set = bus error */
 #define BDM_STATUS_OK         0x0FFFFU
 #define BDM_STATUS_BERR       0x8001U
 #define BDM_STATUS_NOT_READY_RESP  0x00000U
@@ -104,7 +57,6 @@
 #define BDM_REG_CLASS_ADDR    0x0004U
 
 /* System register select codes (RSREG/WSREG, bits [6:3]) */
-/* Values are pre-shifted, OR directly with opcode base */
 #define BDM_SR_RPC            0x0000U
 #define BDM_SR_PCC            0x0008U
 #define BDM_SR_SR             0x002CU

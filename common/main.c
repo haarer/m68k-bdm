@@ -1,10 +1,8 @@
-#include <avr/io.h>
-#include <avr/interrupt.h>
 #include <string.h>
 #include "config.h"
-#include "uart.h"
-#include "protocol.h"
-#include "bdm_core.h"
+#include "hal.h"
+#include "serial/protocol.h"
+#include "bdm_engine/bdm_core.h"
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -338,20 +336,21 @@ static void handle_command(protocol_command_t *cmd)
 
 int main(void)
 {
-    uart_init(SERIAL_UBRR_VALUE);
+    hal_serial_init(SERIAL_BAUD);
+    hal_timer_init();
     bdm_init();
 
-    sei();
+    hal_irq_enable();
 
     protocol_command_t cmd;
 
     while (1) {
-        uint8_t byte;
-        if (uart_receive(&byte)) {
+        if (hal_serial_has_data()) {
+            uint8_t byte = hal_serial_getc();
             if (protocol_parse_command(byte, &cmd)) {
-                cli();
+                hal_irq_disable();
                 handle_command(&cmd);
-                sei();
+                hal_irq_enable();
             }
         }
     }

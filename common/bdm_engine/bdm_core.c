@@ -1,8 +1,6 @@
-#include <avr/io.h>
-#include <avr/interrupt.h>
 #include <string.h>
-#include <util/delay.h>
 #include "config.h"
+#include "hal.h"
 #include "bdm_timing.h"
 #include "bdm_core.h"
 
@@ -24,37 +22,37 @@ static inline bool bdm_status_is_error(uint16_t status)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Pin helpers (CPU32 §7.2.7)                                         */
+/*  Pin helpers (CPU32 §7.2.7) — use board_config.h pin defines        */
 /* ------------------------------------------------------------------ */
 
 static inline void dsclk_high(void)
 {
-    DSCLK_PORT |=  (1 << DSCLK_BIT);
+    hal_gpio_set_high(DSCLK_PORT, DSCLK_PIN);
 }
 
 static inline void dsclk_low(void)
 {
-    DSCLK_PORT &= ~(1 << DSCLK_BIT);
+    hal_gpio_set_low(DSCLK_PORT, DSCLK_PIN);
 }
 
 static inline void dsi_high(void)
 {
-    DSI_PORT |=  (1 << DSI_BIT);
+    hal_gpio_set_high(DSI_PORT, DSI_PIN);
 }
 
 static inline void dsi_low(void)
 {
-    DSI_PORT &= ~(1 << DSI_BIT);
+    hal_gpio_set_low(DSI_PORT, DSI_PIN);
 }
 
 static inline bool dso_read(void)
 {
-    return (DSO_PIN & (1 << DSO_BIT)) != 0;
+    return hal_gpio_read(DSO_PORT, DSO_PIN) != 0;
 }
 
 static inline bool freeze_read(void)
 {
-    return (FREEZE_PIN & (1 << FREEZE_BIT)) != 0;
+    return hal_gpio_read(FREEZE_PORT, FREEZE_PIN) != 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -67,7 +65,7 @@ static inline bool freeze_read(void)
 
 uint16_t bdm_shift_word(uint16_t out, bool poll)
 {
-    cli();
+    hal_irq_disable();
 
     uint16_t data_in  = 0;
     uint8_t  status16 = 0;
@@ -102,11 +100,11 @@ uint16_t bdm_shift_word(uint16_t out, bool poll)
         if (status16 == BDM_STATUS_READY) {
             last_status_word = data_in;
         }
-        sei();
+        hal_irq_enable();
         return (status16 == BDM_STATUS_READY) ? data_in : 0xFFFFU;
     }
 
-    sei();
+    hal_irq_enable();
     return data_in;
 }
 
@@ -122,7 +120,7 @@ bool bdm_poll_ready(void)
     bdm_timeout_start();
 
     for (uint16_t i = 0; i < 10000; i++) {
-        cli();
+        hal_irq_disable();
         uint16_t data_in  = 0;
         uint8_t  status16 = 0;
 
@@ -137,7 +135,7 @@ bool bdm_poll_ready(void)
             else
                 status16 = dso_read() ? 1U : 0U;
         }
-        sei();
+        hal_irq_enable();
 
         if (status16 == BDM_STATUS_READY) {
             last_status_word = data_in;
@@ -159,36 +157,36 @@ bool bdm_poll_ready(void)
 
 bool bdm_enable(void)
 {
-    cli();
+    hal_irq_disable();
 
     /* 1. Assert BKPT (DSCLK low) */
     dsclk_low();
     dsi_high();
 
     /* 2. Assert target RESET (active low) */
-    TARGET_RESET_PORT &= ~(1 << TARGET_RESET_BIT);
+    hal_gpio_set_low(TARGET_RESET_PORT, TARGET_RESET_PIN);
 
     /* 3. Hold BKPT low for ≥2 target clock cycles before releasing RESET */
-    _delay_us(10);
+    hal_delay_us(10);
 
     /* 4. Release RESET — BKPT samples low at rising edge → BDM enabled */
-    TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
+    hal_gpio_set_high(TARGET_RESET_PORT, TARGET_RESET_PIN);
 
     /* 5. Wait for FREEZE assertion */
     bdm_timeout_start();
 
     for (uint16_t i = 0; i < 1000; i++) {
         if (!freeze_read()) {
-            sei();
+            hal_irq_enable();
             in_bdm_mode = true;
             return true;
         }
         if (bdm_timeout_exceeded())
             break;
-        _delay_us(10);
+        hal_delay_us(10);
     }
 
-    sei();
+    hal_irq_enable();
     in_bdm_mode = false;
     return false;
 }
@@ -200,7 +198,7 @@ bool bdm_enable(void)
 
 static bool bdm_send_preamble(void)
 {
-    cli();
+    hal_irq_disable();
 
     dsclk_low();
     dsi_high();
@@ -211,15 +209,15 @@ static bool bdm_send_preamble(void)
 
     for (uint16_t i = 0; i < 1000; i++) {
         if (!freeze_read()) {
-            sei();
+            hal_irq_enable();
             return true;
         }
         if (bdm_timeout_exceeded())
             break;
-        _delay_us(10);
+        hal_delay_us(10);
     }
 
-    sei();
+    hal_irq_enable();
     return false;
 }
 
@@ -608,9 +606,9 @@ bdm_result_t bdm_target_reset(void)
         return BDM_ERR_BERR;
 
     /* Assert hardware reset line */
-    TARGET_RESET_PORT &= ~(1 << TARGET_RESET_BIT);
-    bdm_delay_us(10);
-    TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
+    hal_gpio_set_low(TARGET_RESET_PORT, TARGET_RESET_PIN);
+    hal_delay_us(10);
+    hal_gpio_set_high(TARGET_RESET_PORT, TARGET_RESET_PIN);
 
     return BDM_OK;
 }
@@ -749,20 +747,17 @@ bool bdm_in_bdm_mode(void)
 
 void bdm_init(void)
 {
-    DSCLK_DDR      |=  (1 << DSCLK_BIT);
-    DSI_DDR        |=  (1 << DSI_BIT);
-    FREEZE_DDR     &= ~(1 << FREEZE_BIT);
-    DSO_DDR        &= ~(1 << DSO_BIT);
-    TARGET_RESET_DDR |= (1 << TARGET_RESET_BIT);
+    hal_gpio_set_output(DSCLK_PORT, DSCLK_PIN);
+    hal_gpio_set_output(DSI_PORT, DSI_PIN);
+    hal_gpio_set_output(TARGET_RESET_PORT, TARGET_RESET_PIN);
 
-    DSCLK_PORT     |=  (1 << DSCLK_BIT);
-    DSI_PORT       &= ~(1 << DSI_BIT);
-    TARGET_RESET_PORT |= (1 << TARGET_RESET_BIT);
+    hal_gpio_set_high(DSCLK_PORT, DSCLK_PIN);
+    hal_gpio_set_low(DSI_PORT, DSI_PIN);
+    hal_gpio_set_high(TARGET_RESET_PORT, TARGET_RESET_PIN);
 
-    /* Enable pull-ups on input pins so they read high (no target)
-       when nothing is connected. */
-    FREEZE_PORT    |=  (1 << FREEZE_BIT);
-    DSO_PORT       |=  (1 << DSO_BIT);
+    /* Configure input pins with pull-ups */
+    hal_gpio_set_input_pullup(FREEZE_PORT, FREEZE_PIN);
+    hal_gpio_set_input_pullup(DSO_PORT, DSO_PIN);
 
     in_bdm_mode = false;
     bdm_timing_init();

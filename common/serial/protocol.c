@@ -1,7 +1,6 @@
-#include <avr/io.h>
 #include <string.h>
 #include "config.h"
-#include "uart.h"
+#include "hal.h"
 #include "protocol.h"
 #include "checksum.h"
 
@@ -83,22 +82,23 @@ void protocol_send_response(protocol_response_t *rsp)
 {
     uint8_t cs = 0;
 
-    uart_transmit(PROTOCOL_STX);
+    hal_serial_putc(PROTOCOL_STX);
     cs ^= PROTOCOL_STX;
 
-    uart_transmit(0x80 | rsp->code);
+    hal_serial_putc(0x80 | rsp->code);
     cs ^= (0x80 | rsp->code);
 
-    uart_transmit(rsp->len);
+    hal_serial_putc(rsp->len);
     cs ^= rsp->len;
 
     for (uint8_t i = 0; i < rsp->len; i++) {
-        uart_transmit(rsp->payload[i]);
+        hal_serial_putc(rsp->payload[i]);
         cs ^= rsp->payload[i];
     }
 
-    uart_transmit(cs);
-    uart_transmit(PROTOCOL_ETX);
+    hal_serial_putc(cs);
+    hal_serial_putc(PROTOCOL_ETX);
+    hal_serial_flush();
 }
 
 void protocol_send_error(uint8_t cmd, uint8_t error_code)
