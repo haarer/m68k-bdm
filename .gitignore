@@ -1,6 +1,25 @@
-**/*.o
-**/*.elf
-**/*.hex
-**/*.eep
-**/*.lst
+# Build outputs
+build/
+
+# Legacy root-level artifacts (pre-refactoring)
+*.o
+*.elf
+*.hex
+*.bin
+*.eep
+*.lst
+
+# Python test environment
 venv/
+__pycache__/
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
