@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------ #
 #  m68k-bdm — Multi-architecture BDM bridge                          #
-#  Usage: make VARIANT=avr|stm32f1|target_sim [all|clean|flash|size] #
+#  Usage: make VARIANT=avr|stm32f1|stm32f4|target_sim [all|clean|flash|size] #
 #  Build outputs go to build/$(VARIANT)/                              #
 # ------------------------------------------------------------------ #
 
@@ -68,6 +68,23 @@ else ifeq ($(VARIANT),stm32f1)
 
     SIZE_FMT   :=
 
+else ifeq ($(VARIANT),stm32f4)
+    TOOLCHAIN  := /opt/toolchain-arm-none-eabi-current/bin
+    CC         := $(TOOLCHAIN)/arm-none-eabi-gcc
+    OBJCOPY    := $(TOOLCHAIN)/arm-none-eabi-objcopy
+    SIZE       := $(TOOLCHAIN)/arm-none-eabi-size
+    OD         := $(TOOLCHAIN)/arm-none-eabi-objdump
+
+    CFLAGS_ARCH := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -DF_CPU=96000000UL
+    LDFLAGS    := -mcpu=cortex-m4 -mthumb -T $(ARCH)/stm32f411ce.ld -nostartfiles
+
+    ARCH_SRCS  := $(ARCH)/hal_usb_cdc.c $(ARCH)/startup_stm32f411xe.S
+
+    FLASH_TOOL := st-flash
+    FLASH_ARGS := write
+
+    SIZE_FMT   :=
+
 else ifeq ($(VARIANT),target_sim)
     TOOLCHAIN  := /opt/toolchain-arm-none-eabi-current/bin
     CC         := $(TOOLCHAIN)/arm-none-eabi-gcc
@@ -75,11 +92,11 @@ else ifeq ($(VARIANT),target_sim)
     SIZE       := $(TOOLCHAIN)/arm-none-eabi-size
     OD         := $(TOOLCHAIN)/arm-none-eabi-objdump
 
-    CFLAGS_ARCH := -mcpu=cortex-m3 -mthumb -DF_CPU=72000000UL
-    LDFLAGS    := -mcpu=cortex-m3 -mthumb -T arch/stm32f1/stm32f103c8.ld -nostartfiles
+    CFLAGS_ARCH := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft -DF_CPU=96000000UL
+    LDFLAGS    := -mcpu=cortex-m4 -mthumb -T arch/stm32f4/stm32f411ce.ld -nostartfiles
 
-    # Target simulator uses its own sources + shared STM32 HAL + startup
-    ARCH_SRCS  := arch/stm32f1/hal_usb_cdc.c arch/stm32f1/startup_stm32f103xb.S
+    # Target simulator uses its own sources + shared STM32F4 HAL + startup
+    ARCH_SRCS  := arch/stm32f4/hal_usb_cdc.c arch/stm32f4/startup_stm32f411xe.S
     SIM_SRCS   := $(TARGET_SIM)/main.c $(TARGET_SIM)/sim_core.c $(TARGET_SIM)/sim_bdm.c $(TARGET_SIM)/sim_debug.c
 
     FLASH_TOOL := st-flash
@@ -88,7 +105,7 @@ else ifeq ($(VARIANT),target_sim)
     SIZE_FMT   :=
 
 else
-    $(error Unknown VARIANT=$(VARIANT). Use avr, stm32f1, or target_sim)
+    $(error Unknown VARIANT=$(VARIANT). Use avr, stm32f1, stm32f4, or target_sim)
 endif
 
 # ------------------------------------------------------------------ #
@@ -132,7 +149,10 @@ all: $(TARGET).hex $(TARGET).bin size
 
 $(BUILDDIR):
 ifeq ($(VARIANT),target_sim)
-	mkdir -p $(BUILDDIR)/$(TARGET_SIM) $(BUILDDIR)/arch/stm32f1 $(BUILDDIR)/common/utils
+	mkdir -p $(BUILDDIR)/$(TARGET_SIM) $(BUILDDIR)/arch/stm32f4 $(BUILDDIR)/common/utils
+else ifeq ($(VARIANT),stm32f4)
+	mkdir -p $(BUILDDIR)/$(COMMON)/serial $(BUILDDIR)/$(COMMON)/bdm_engine \
+	         $(BUILDDIR)/$(COMMON)/utils $(BUILDDIR)/$(ARCH)
 else
 	mkdir -p $(BUILDDIR)/$(COMMON)/serial $(BUILDDIR)/$(COMMON)/bdm_engine \
 	         $(BUILDDIR)/$(COMMON)/utils $(BUILDDIR)/$(ARCH)
@@ -205,7 +225,8 @@ help:
 	@echo "Variants:"
 	@echo "  avr         Arduino Mega 2560 (ATmega2560, UART host comms)"
 	@echo "  stm32f1     Blackpill STM32F103C8T6 (USB CDC host comms)"
-	@echo "  target_sim  Blackpill CPU32 BDM target simulator"
+	@echo "  stm32f4     Blackpill STM32F411CEU6 (USB OTG FS CDC host comms)"
+	@echo "  target_sim  Blackpill STM32F411CEU6 CPU32 BDM target simulator"
 	@echo ""
 	@echo "Targets:"
 	@echo "  all         Build firmware (elf, hex, bin) + size report"

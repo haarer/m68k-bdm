@@ -8,7 +8,7 @@
 /* ------------------------------------------------------------------ */
 
 #define BOARD_TARGET_SIM
-#define F_CPU 72000000UL
+#define F_CPU 96000000UL
 
 /* ------------------------------------------------------------------ */
 /*  BDM Pin port/pin definitions (STM32F103C8T6 — Target Simulator)   */
