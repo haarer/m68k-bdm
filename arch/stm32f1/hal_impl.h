@@ -108,7 +108,7 @@ typedef struct {
 #define USB_CNTR_SUSPM   (1 << 11)
 #define USB_CNTR_WKUPM   (1 << 12)
 #define USB_CNTR_FSUSP   (1 << 14)
-#define USB_CNTR_PDWN    (1 << 0)
+#define USB_CNTR_PDWN    (1 << 1)
 #define USB_CNTR_FRES    (1 << 0)
 
 #define USB_ISTR_CTR     (1 << 15)

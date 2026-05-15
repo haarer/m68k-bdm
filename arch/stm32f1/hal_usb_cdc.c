@@ -452,11 +452,22 @@ void hal_serial_init(uint32_t baud)
     ep1_tx_pos = 0;
     ep1_tx_len = 0;
 
-    /* USB peripheral reset and init */
+    /* USB peripheral init with disconnect/reconnect sequence */
+    /* Step 1: Force reset (disconnects D+ pull-up) */
     USB->CNTR = USB_CNTR_FRES;
-    USB->CNTR = 0;
     USB->ISTR = 0;
     USB->BTABLE = 0;
+
+    /* Step 2: Wait ~100ms so host detects disconnect */
+    for (volatile uint32_t i = 0; i < 720000; i++)
+        ;
+
+    /* Step 3: Clear reset (reconnects D+ pull-up) — host sees new device */
+    USB->CNTR = 0;
+
+    /* Small delay for USB peripheral to stabilize */
+    for (volatile uint32_t i = 0; i < 72000; i++)
+        ;
 
     /* Enable interrupts */
     USB->CNTR = USB_CNTR_CTRM | USB_CNTR_RESETM | USB_CNTR_SUSPM | USB_CNTR_WKUPM;
