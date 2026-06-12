@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-bdm_cli.py  –  Interactive BDM command-line tool for the AVR bridge.
+bdm_cli.py  –  Interactive BDM command-line tool for the bridge.
 
 Usage:
     python3 bdm_cli.py [-p PORT] [-b BAUD]
 
-Connects to the flashed AVR bridge and provides a readline-based REPL
+Connects to the flashed bridge and provides a readline-based REPL
 for sending BDM commands to the CPU32 target.
 
 Type 'help' at the prompt for available commands.

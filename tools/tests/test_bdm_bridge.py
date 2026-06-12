@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BDM Bridge Integration Tests
-Talks to the flashed AVR bridge over serial and exercises every command.
+Talks to the flashed bridge over serial and exercises every command.
 Without a 68331 target attached, BDM commands return RSP_TARGET_ERROR,
 but protocol framing, checksums, and response codes are verified.
 """
@@ -84,7 +84,7 @@ class BridgeClient:
 
     def __init__(self, port=PORT, baud=BAUD):
         self.port = serial.Serial(port, baud, timeout=2, dsrdtr=True)
-        time.sleep(2)  # wait for AVR to boot after DTR reset
+        time.sleep(2)  # wait for bridge to boot after DTR reset
         self.port.flushInput()
         self.port.flushOutput()
 
