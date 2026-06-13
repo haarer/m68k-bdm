@@ -3,21 +3,26 @@ CC     = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE   = $(PREFIX)size
 
+COMMON_DIR = ../common
+
 ARCH_FLAGS  = -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16
 OPT_FLAGS   = -O2 -ffunction-sections -fdata-sections
 WARN_FLAGS  = -Wall -Wextra -Werror
 CFLAGS      = -std=gnu11 $(ARCH_FLAGS) $(OPT_FLAGS) $(WARN_FLAGS) -ggdb3
 LDFLAGS     = -nostartfiles $(ARCH_FLAGS) $(OPT_FLAGS) $(WARN_FLAGS) -ggdb3 \
-              -Wl,-gc-sections,-Map,main.map -Wl,--cref -Tstm32f411.ld -lc -lgcc
+              -Wl,-gc-sections,-Map,main.map -Wl,--cref -T$(COMMON_DIR)/stm32f411.ld -lc -lgcc
 
-INCLUDES = -I ../STM32CubeF4/Drivers/CMSIS/Include \
+INCLUDES = -I $(COMMON_DIR) \
+           -I ../STM32CubeF4/Drivers/CMSIS/Include \
            -I ../STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include
 
 .DEFAULT_GOAL := main.hex
 
-OBJS = startup.o main.o delay.o uart.o cli.o syscall.o
+COMMON_OBJS = $(COMMON_DIR)/startup.o $(COMMON_DIR)/delay.o $(COMMON_DIR)/uart.o $(COMMON_DIR)/syscall.o
+BRIDGE_OBJS = main.o cli.o
+OBJS = $(COMMON_OBJS) $(BRIDGE_OBJS)
 
-$(OBJS): Makefile stm32f411.ld
+$(OBJS): Makefile $(COMMON_DIR)/stm32f411.ld
 
 %.o: %.c
 	$(CC) -c -o $@ $(CFLAGS) $(INCLUDES) $<
@@ -34,7 +39,8 @@ flash: main.hex
 
 # --- Build variants for ABI / float-printf comparison ---
 BUILD_DIR = build
-OBJ_FILES = startup.o main.o delay.o uart.o cli.o syscall.o
+OBJ_FILES = $(COMMON_DIR)/startup.o $(COMMON_DIR)/delay.o $(COMMON_DIR)/uart.o $(COMMON_DIR)/syscall.o \
+            main.o cli.o
 
 ARCH_soft-nofp  := -mthumb -mcpu=cortex-m4 -mfloat-abi=soft
 ARCH_soft-fp    := -mthumb -mcpu=cortex-m4 -mfloat-abi=soft
@@ -68,18 +74,24 @@ EXTRA_hard-nofp-stdio := $(EXTRA_hard-nofp)
 EXTRA_hard-fp-stdio   := $(EXTRA_hard-fp)
 
 define variant_rule =
+build/$1/$(COMMON_DIR)/%.o: $(COMMON_DIR)/%.c | build/$1/$(COMMON_DIR)/
+	$$(CC) -c -o $$@ $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 $$(DEFS_$1) $$(INCLUDES) $$<
+
 build/$1/%.o: %.c | build/$1/
 	$$(CC) -c -o $$@ $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 $$(DEFS_$1) $$(INCLUDES) $$<
 
 build/$1/main.elf: $$(addprefix build/$1/,$$(OBJ_FILES))
 	$$(CC) -o $$@ $$^ -nostartfiles $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 \
-		$$(EXTRA_$1) -Wl,-gc-sections,-Map,build/$1/main.map -Wl,--cref -Tstm32f411.ld -lc -lgcc
+		$$(EXTRA_$1) -Wl,-gc-sections,-Map,build/$1/main.map -Wl,--cref -T$(COMMON_DIR)/stm32f411.ld -lc -lgcc
 	$$(SIZE) $$@
 
 build/$1/main.hex: build/$1/main.elf
 	$$(OBJCOPY) -O ihex --set-start 0x08000000 $$< $$@
 
 build/$1/:
+	mkdir -p $$@
+
+build/$1/$(COMMON_DIR)/:
 	mkdir -p $$@
 endef
 
@@ -129,21 +141,15 @@ flash-hard-fp-stdio: build/hard-fp-stdio/main.hex
 flash-soft-fp-stdio: build/soft-fp-stdio/main.hex
 	st-flash --reset --format ihex write $<
 
-STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h:
-	git clone --depth 1 https://github.com/STMicroelectronics/STM32CubeF4.git STM32CubeF4
-	git -C STM32CubeF4 submodule update --init --depth 1 \
-		Drivers/CMSIS/Device/ST/STM32F4xx
-
-cube: STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h
-
 clean:
 	rm -rf *.o *.hex *.elf *.map $(BUILD_DIR)
+	rm -f $(COMMON_DIR)/*.o
 
 test:
 	uv sync --directory test
 	uv run --directory test python -m pytest -v
 
-.PHONY: clean cube flash test variants variant-sizes \
+.PHONY: clean flash test variants variant-sizes \
         soft-nofp soft-fp hard-nofp hard-fp \
         soft-nofp-stdio soft-fp-stdio hard-nofp-stdio hard-fp-stdio \
         flash-hard-fp flash-soft-fp flash-hard-fp-stdio flash-soft-fp-stdio

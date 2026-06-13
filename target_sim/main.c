@@ -13,6 +13,9 @@
 int main(void)
 {
     hal_timer_init();
+    hal_led_init();
+    hal_led_blink(5, 100);
+
     hal_serial_init(0);  /* USB CDC (baud ignored) */
     dbg_init();
 

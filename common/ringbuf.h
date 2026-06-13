@@ -14,5 +14,3 @@ inline int      ringbuffer_full(const struct Ringbuffer *rb)  { return sizeof(rb
 inline void     ringbuffer_clear(struct Ringbuffer *rb)       { rb->head = rb->tail; }
 inline void     ringbuffer_put_head(struct Ringbuffer *rb, uint8_t c) { rb->buf[rb->head++ % sizeof rb->buf] = c; }
 inline uint8_t  ringbuffer_get_tail(struct Ringbuffer *rb)               { return rb->buf[rb->tail++ % sizeof rb->buf]; }
-
-
