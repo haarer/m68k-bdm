@@ -1,6 +1,4 @@
 #include <string.h>
-#include "board_config.h"
-#include "hal.h"
 #include "sim_bdm.h"
 #include "sim_core.h"
 #include "sim_debug.h"

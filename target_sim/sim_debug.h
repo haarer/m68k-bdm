@@ -8,7 +8,7 @@
 /*  Non-blocking debug logger for target simulator                     */
 /*                                                                     */
 /*  Events are enqueued into a ring buffer during BDM operations      */
-/*  (zero blocking). The main loop drains the buffer to USB CDC       */
+/*  (zero blocking). The main loop drains the buffer to UART          */
 /*  between commands, so serial output never interferes with BDM      */
 /*  timing.                                                           */
 /* ------------------------------------------------------------------ */
