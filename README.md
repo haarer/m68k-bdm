@@ -1,30 +1,31 @@
-# AVR BDM Debug Bridge for Motorola CPU32 (MC68331)
+# STM32F411 BDM Debug Bridge for Motorola CPU32 (MC68331)
 
 ## Project Overview
 
-This project implements a hardware debug bridge that connects a GNU toolchain on a Linux host to a Motorola CPU32 target (MC68331) via the Background Debug Mode (BDM) protocol. The bridge firmware runs on an AVR microcontroller, translating between a serial interface toward the host PC and the BDM bus toward the target. An interactive Python CLI tool (`bdm_cli.py`) provides a command-line interface for sending BDM commands to the bridge.
+This project implements a hardware debug bridge that connects a GNU toolchain on a Linux host to a Motorola CPU32 target (MC68331) via the Background Debug Mode (BDM) protocol. The bridge firmware runs on an STM32F411 Cortex-M4 microcontroller, translating between a serial interface toward the host PC and the BDM bus toward the target. An interactive Python CLI tool (`bdm_cli.py`) provides a command-line interface for sending BDM commands to the bridge.
 
 ## Architecture
 
 ```
-┌──────────────┐        Serial (UART)        ┌──────────────┐        BDM Bus      ┌──────────────┐
-│  Linux Host  │ ◄────────────────────────►  │  AVR Bridge  │ ◄────────────────►  │  MC68331     │
-│              │  Custom command protocol    │  Firmware    │  BDM protocol       │  (Target)    │
-│  bdm_cli.py  │                             │              │                     │              │
-└──────────────┘                             └──────────────┘                     └──────────────┘
+┌──────────────┐        Serial (UART)        ┌─────────────────┐        BDM Bus      ┌──────────────┐
+│  Linux Host  │ ◄────────────────────────►  │  STM32F411      │ ◄────────────────►  │  MC68331     │
+│              │  Custom command protocol    │  Bridge          │  BDM protocol       │  (Target)    │
+│  bdm_cli.py  │                             │  Firmware        │                      │              │
+└──────────────┘                             └─────────────────┘                     └──────────────┘
 ```
 
 ## System Components
 
-### 1. AVR Bridge Firmware
+### 1. STM32F411 Bridge Firmware (`bridge/`)
 
-The firmware running on the AVR microcontroller performs the following functions:
+The firmware running on the STM32F411 microcontroller performs the following functions:
 
 - **Serial Interface (Host Side)**
-  - UART communication with the Linux host PC (USART0)
+  - UART communication with the Linux host PC (USART1, PB6/PB7 via FTDI adapter)
   - Parses commands from the host using a custom command-response protocol
   - Returns responses, memory dumps, register states, and status information
   - Configurable baud rate (default 115200 bps)
+  - Interrupt-driven with ring buffers for non-blocking I/O
 
 - **BDM Protocol Engine (Target Side)**
   - Implements the CPU32 BDM serial interface per Reference Manual §7.2.7
@@ -49,10 +50,10 @@ The firmware running on the AVR microcontroller performs the following functions
 
 ### 3. Hardware
 
-- **AVR Microcontroller**
-  - Target AVR: ATmega2560 (Arduino Mega 2560)
-  - Requires sufficient I/O pins for BDM signals and UART
-  - Requires adequate flash for firmware and SRAM for buffers
+- **STM32F411 Microcontroller (Black Pill)**
+  - Target MCU: STM32F411CEU6 (Cortex-M4, 100 MHz)
+  - 512 KiB flash, 128 KiB SRAM
+  - On-board LED on PC13
 
 - **BDM Interface Circuit**
   - Level shifting if target operates at different voltage
@@ -60,9 +61,11 @@ The firmware running on the AVR microcontroller performs the following functions
     DSO/IPIPE (data out, input), FREEZE (BDM entry, input)
   - Target reset control line
 
-- **Serial Interface**
-  - USB-to-serial adapter or native USB UART on the AVR
-  - Power delivery to the bridge board
+- **Serial Interface (FTDI Adapter)**
+  - External FTDI USB-to-serial adapter connected to USART1 (PB6 TX, PB7 RX)
+  - Appears as `/dev/ttyUSB0` on Linux
+  - Configurable baud rate (default 115200)
+  - Power delivery via USB from either the FTDI or the ST-Link
 
 ## BDM Protocol Specification
 
@@ -226,34 +229,36 @@ XOR checksum covers all bytes from STX through payload (inclusive), excluding th
 
 ```
 .
-├── main.c              - Entry point, command dispatch
-├── config.h            - Board, pin, timing, and protocol configuration
+├── arch/               - Architecture-specific code (stm32f4, avr, target_sim)
+├── bridge/             - STM32F411 bridge firmware
+│   ├── main.c          - Entry point, command dispatch
+│   ├── startup.c       - Reset handler, vector table, SystemInit clock config
+│   ├── stm32f411.ld    - Linker script (512K flash, 128K RAM)
+│   ├── uart.c/h        - Interrupt-driven UART with ring buffers
+│   ├── cli.c/h         - Interactive command-line interface
+│   ├── delay.c/h       - Busy-wait microsecond/millisecond delays
+│   ├── syscall.c       - Newlib syscall stubs (_write, _read, _sbrk)
+│   ├── ringbuf.h       - Lock-free ring buffer
+│   └── test/           - Python test suite (pytest, pyserial)
 ├── bdm_cli.py          - Interactive CLI tool for sending BDM commands
-├── Makefile            - Build system
-├── bdm_engine/         - BDM protocol implementation
-│   ├── bdm_core.c/h    - Frame assembly/disassembly, BDM state machine
-│   └── bdm_timing.c/h  - Signal timing and bit-banging delays
-├── serial/             - Host serial interface
-│   ├── uart.c/h        - UART driver (USART0)
-│   └── protocol.c/h    - Command parsing and response formatting
-├── hal/                - Hardware abstraction
-│   └── pins.c/h        - GPIO configuration for BDM signals
-├── utils/              - Common utilities
-│   ├── checksum.c/h    - XOR checksum algorithms
-│   └── ringbuf.c/h     - Ring buffer for serial I/O
-└── tests/              - Python test suite
-    └── test_bdm_bridge.py
+├── common/             - Shared code
+├── docs/               - Documentation
+├── hal/                - Hardware abstraction layer (legacy)
+├── STM32CubeF4/        - CMSIS headers and device support
+├── target_sim/         - Software target simulator for testing
+└── tests/              - Python test suite (legacy)
 ```
 
 ## Configuration
 
-### Build Configuration (`config.h`)
-- Target AVR model: ATmega2560
-- BDM clock frequency: 500 kHz (configurable via `BDM_CLOCK_KHZ`)
-- Serial baud rate: 115200 (configurable via `SERIAL_BAUD`)
-- Buffer sizes: 256 bytes RX/TX (configurable via `RX_BUFFER_SIZE`/`TX_BUFFER_SIZE`)
+### Build Configuration (`bridge/config.h`)
+- Target MCU: STM32F411CEU6 (Cortex-M4)
+- CPU clock: 100 MHz (PLL from HSE 25 MHz or HSI)
+- BDM clock frequency: 500 kHz (configurable)
+- Serial baud rate: 115200 (configurable)
+- Buffer sizes: 256 bytes RX/TX ring buffers
 
-### Pin Mapping (`config.h`)
+### Pin Mapping (`bridge/config.h`)
 | Signal              | Port | Pin | Direction |
 |---------------------|------|-----|-----------|
 | DSCLK (BKPT)        | A    | 0   | Output    |
@@ -261,28 +266,26 @@ XOR checksum covers all bytes from STX through payload (inclusive), excluding th
 | TARGET_RESET        | A    | 2   | Output    |
 | DSO (IPIPE)         | B    | 0   | Input     |
 | FREEZE              | B    | 1   | Input     |
+| USART1 TX (FTDI)    | B    | 6   | Output    |
+| USART1 RX (FTDI)    | B    | 7   | Input     |
+| LED                 | C    | 13  | Output    |
 
 ## Testing
 
-Run the Python test suite against the flashed bridge:
+Run the Python test suite against the flashed bridge (FTDI adapter connected on `/dev/ttyUSB0`):
 
 ```sh
-make test
+make -C bridge test
 ```
 
-The test suite sends real frames to the bridge over serial and validates every response. Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol framing, checksums, and response codes are verified end-to-end.
+The test suite communicates with the bridge over the FTDI serial connection and validates every response. Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol framing, command parsing, and UART loopback are verified end-to-end.
 
-### Test Cases (25 tests)
+### Test Cases (22 tests)
 
-| Category | Count | Description |
-|----------|-------|-------------|
-| Frame Construction | 3 | STX/ETX framing, XOR checksum, payload embedding |
-| Bridge Integration | 22 | All 18 commands exercised over real serial, response codes validated |
-
-**Non-BDM commands** (return `RSP_OK` without target): STATUS, CONFIG, BREAKPOINT_SET, BREAKPOINT_CLR
-**BDM enable** (return `RSP_TARGET_ERROR` without target): BDM_ENABLE (§7.2.1 reset sequence)
-**BDM commands** (return `RSP_TARGET_ERROR` without target): MEM_READ, MEM_WRITE, REG_READ, REG_WRITE, SYSREG_READ, SYSREG_WRITE, MEM_DUMP, MEM_FILL, TARGET_RESET, TARGET_HALT, TARGET_GO, STEP, CALL
-**Protocol edge cases**: unknown command returns `RSP_NOT_SUPPORTED`, short payload returns `RSP_ERROR`, rapid-fire commands, response framing validation
+| File | Count | Description |
+|------|-------|-------------|
+| `test_loopback.py` | 14 | Boot message, CLI commands, echo, ping, binary data transfer, buffer boundary tests |
+| `test_uart_robustness.py` | 8 | Rapid-fire commands, mixed command sequences, all byte values, ring buffer boundaries |
 
 ## Interactive CLI
 
@@ -291,14 +294,14 @@ The test suite sends real frames to the bridge over serial and validates every r
 ### Launching
 
 ```sh
-# Default port (/dev/ttyACM0) and baud (115200)
+# Default port (/dev/ttyUSB0) and baud (115200)
 python3 bdm_cli.py
 
 # Custom port and baud
 python3 bdm_cli.py -p /dev/ttyUSB0 -b 57600
 
 # Via Makefile
-make cli-port PORT=/dev/ttyACM0 BAUD=115200
+make cli-port PORT=/dev/ttyUSB0 BAUD=115200
 ```
 
 ### Command Reference
@@ -351,81 +354,87 @@ Disconnected.
 
 ## Development Environment
 
-### AVR Toolchain (Bridge Firmware)
+### ARM Toolchain (Bridge Firmware)
 
-- **Source**: [haarer/toolchain68k gcc152](https://github.com/haarer/toolchain68k/releases/tag/gcc152)
-- **Package**: `toolchain-avr-alpine-gcc-15.2.0.tar.gz`
-- **Install Path**: `/opt` (binaries in `/opt/toolchain-avr-current/bin/`, libs in `/opt/toolchain-avr-current/lib/`, AVR libs in `/opt/toolchain-avr-current/avr/lib/`)
+- **Compiler**: arm-none-eabi-gcc 15.2.0
 - **Components**:
-  - avr-gcc 15.2.0
-  - avr-gdb 17.1
-  - avr-ld 2.46.0 (GNU Binutils)
+  - arm-none-eabi-gcc 15.2.0
+  - arm-none-eabi-gdb
+  - arm-none-eabi-ld (GNU Binutils)
 - **Build System**: Make
-- **Target MCU**: ATmega2560 (Arduino Mega 2560)
+- **Target MCU**: STM32F411CEU6 (Cortex-M4)
+- **Install**:
+  ```sh
+  # Alpine Linux
+  apk add gcc-arm-none-eabi newlib-arm-none-eabi g++-arm-none-eabi
+  # Debian/Ubuntu
+  apt install gcc-arm-none-eabi libnewlib-arm-none-eabi
+  ```
+
+### CMSIS Headers
+
+The project uses the official STM32CubeF4 CMSIS headers, located in `STM32CubeF4/`. To fetch them:
+
+```sh
+make -C bridge cube
+```
+
+Or clone manually:
+```sh
+git clone --depth 1 https://github.com/STMicroelectronics/STM32CubeF4.git STM32CubeF4
+```
 
 ## Flashing
 
 ### Prerequisites
 
-Install avrdude:
+Install st-flash (from stlink):
 ```sh
 # Alpine Linux
-apk add avrdude
+apk add stlink
 
 # Debian/Ubuntu
-apt install avrdude
+apt install stlink-tools
 ```
 
 ### Using Makefile
 
-The Makefile provides a `flash` target using the `wiring` programmer (STK500 v2 protocol):
 ```sh
-make flash
+make -C bridge flash
 ```
 
-Override connection parameters:
-```sh
-make flash PORT=/dev/ttyACM0 BAUD=115200
-```
+The ST-Link programmer (on-board or external) is used only for flashing. Serial communication with the host uses a separate FTDI adapter connected to USART1 (PB6/PB7). The board resets after flashing.
 
-The flash target uses the `-D` flag to skip chip erase, which avoids erase failures on some bootloaders.
-
-### Makefile Targets
+### Makefile Targets (`bridge/Makefile`)
 
 | Target     | Description                           |
 |------------|---------------------------------------|
-| all        | Build firmware (hex, eep, size)       |
-| flash      | Flash firmware to AVR                 |
-| eeprom     | Flash EEPROM image                    |
-| fuse       | Set fuse bytes (0xD2/0xFF)           |
+| all        | Build firmware (hex, elf, size)       |
+| flash      | Flash firmware to STM32F411 via ST-Link |
 | test       | Run Python test suite                 |
 | cli        | Launch interactive BDM CLI            |
-| cli-port   | Launch CLI with PORT/BAUD overrides   |
-| disasm     | Generate disassembly listing          |
 | clean      | Remove build artifacts                |
 
-### Makefile Variables
+### Build Variants
 
-| Variable | Default       | Description                    |
-|----------|---------------|--------------------------------|
-| PORT     | /dev/ttyACM0  | Serial port device             |
-| BAUD     | 115200        | Baud rate                      |
-| PROG     | wiring        | avrdude programmer type        |
+The Makefile supports multiple build variants for comparing float ABI and stdio configurations:
 
-### Verify Device Connection
+| Variant       | Float ABI | printf support |
+|---------------|-----------|----------------|
+| `soft-nofp`   | soft      | none           |
+| `soft-fp`     | soft      | float          |
+| `hard-nofp`   | hard      | none           |
+| `hard-fp`     | hard      | float          |
+| `*-stdio`     | as above  | stdio + float  |
 
-Check if the Arduino is detected:
+Build all variants:
 ```sh
-avrdude -c wiring -p atmega2560 -P /dev/ttyACM0 -b 115200 -v
+make -C bridge variants
 ```
 
-Expected output includes: `Device signature = 1E 98 01 (ATmega2560)`
-
-### EEPROM (Optional)
-
-To flash the EEPROM image:
+Flash a specific variant:
 ```sh
-make eeprom
+make -C bridge flash-hard-fp
 ```
 
 ### Host Toolchain (Target Development)
@@ -435,7 +444,7 @@ make eeprom
 
 ## Known Limitations
 
-- BDM clock speed limited by AVR CPU frequency (16 MHz)
+- BDM clock speed limited by Cortex-M4 instruction timing
 - No JTAG support (BDM-only)
 - Memory access speed constrained by synchronous BDM protocol
 - Breakpoint commands return OK but don't use hardware breakpoint support
@@ -447,4 +456,5 @@ make eeprom
 - Motorola MC68331 Reference Manual
 - Motorola CPU32 Background Debug Mode Specification
 - GDB Remote Serial Protocol Documentation
-- AVR Datasheet (model-specific)
+- STM32F411 Reference Manual (RM0383)
+- STM32F411 Datasheet (DS10693)
