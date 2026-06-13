@@ -1,0 +1,10 @@
+*.o
+*.hex
+*.elf
+*.map
+*.bin
+build/
+test/.venv/
+test/uv.lock
+test/__pycache__/
+test/.pytest_cache/
