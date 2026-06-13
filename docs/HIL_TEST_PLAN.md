@@ -2,94 +2,45 @@
 
 ## Overview
 
-This document describes the HIL test architecture for validating the m68k-bdm bridge firmware against a real BDM target simulator running on separate hardware.
+Validates the m68k-bdm bridge firmware against a real BDM target simulator on separate hardware.
 
 ## Architecture
 
 ```
-┌─────────────┐   USB CDC    ┌──────────────────┐   BDM wires   ┌──────────────────┐
-│   Host PC   │◄────────────►│  Blackpill #1    │◄─────────────►│  Blackpill #2    │
-│  (test      │              │  BRIDGE (DUT)    │  DSCLK/DSI/   │  TARGET SIM      │
-│   harness)  │              │  m68k-bdm fw     │  DSO/FREEZE/  │  cpu32_bdm_sim   │
-│             │              │                  │  RESET        │  firmware        │
-└─────────────┘              └──────────────────┘               └──────────────────┘
+┌─────────────┐   USART1 (115200)   ┌──────────────────┐   BDM wires   ┌──────────────────┐
+│   Host PC   │◄──── FTDI (USB) ───►│  Blackpill #1    │◄─────────────►│  Blackpill #2    │
+│  (test      │   PB6 TX / PB7 RX   │  BRIDGE (DUT)    │  DSCLK/DSI/   │  TARGET SIM      │
+│   harness)  │   /dev/ttyUSB0      │  m68k-bdm fw     │  DSO/FREEZE/  │  cpu32_bdm_sim   │
+│             │                     │                  │  RESET        │  firmware        │
+└─────────────┘                     └──────────────────┘               └──────────────────┘
 ```
 
 ### Components
 
 | Component | Role | Hardware | Firmware |
 |-----------|------|----------|----------|
-| **Host PC** | Test harness, command injection, response validation | Any | `tests/test_hil.py` |
-| **Blackpill #1** | Device Under Test (DUT) — BDM bridge | STM32F103C8T6 | `m68k-bdm` (VARIANT=stm32f1) |
-| **Blackpill #2** | CPU32 target simulator | STM32F103C8T6 | `target_sim` (VARIANT=target_sim) |
+| **Host PC** | Test harness, command injection, response validation | Any | `tools/tests/test_hil.py` |
+| **Blackpill #1** | Device Under Test (DUT) — BDM bridge | STM32F411CEU6 | `bridge/main.elf` |
+| **Blackpill #2** | CPU32 target simulator | STM32F411CEU6 | `target_sim/main.elf` |
 
 ### Physical Wiring
 
-Both boards use the same pin mapping. Connect corresponding pins directly with jumper wires.
-Refer to the pinout diagram in `docs/Pinout-Diagram.png`.
+Both boards are STM32F411 Black Pill, 3.3V — no level shifting. Connect with jumper wires:
 
-| Signal | GPIO | Bridge Board Pin | Target Sim Board Pin | Direction |
-|--------|------|-----------------|---------------------|-----------|
-| DSCLK (BDM clock) | PA0 | Right header, pin 7 | Right header, pin 7 | Bridge → Target |
-| DSI (data in to target) | PA1 | Right header, pin 8 | Right header, pin 8 | Bridge → Target |
-| DSO (data out from target) | PA2 | Right header, pin 9 | Right header, pin 9 | Target → Bridge |
-| FREEZE (BDM mode indicator) | PA3 | Right header, pin 10 | Right header, pin 10 | Target → Bridge |
-| TARGET_RESET | PA4 | Right header, pin 11 | Right header, pin 11 | Bridge → Target |
-| Common ground | GND | Right header, pin 2 | Right header, pin 2 | — |
+| Signal | GPIO | Pin | Direction |
+|--------|------|-----|-----------|
+| DSCLK (BDM clock) | PA0 | Blackpill pin 10 | Bridge → Target |
+| DSI (data in) | PA1 | Blackpill pin 11 | Bridge → Target |
+| TARGET_RESET | PA2 | Blackpill pin 12 | Bridge → Target |
+| DSO (data out) | PB0 | Blackpill pin 20 | Target → Bridge |
+| FREEZE (BDM mode) | PB1 | Blackpill pin 21 | Target → Bridge |
+| Common ground | GND | Any GND pin | — |
 
-Both boards are 3.3V — no level shifting required.
-
-## Development Methodology: Independent Implementation
-
-### Principle
-
-Two engineers implement the BDM protocol **independently**, each reading only the CPU32 specification. Neither sees the other's code. Mismatches during HIL testing reveal spec ambiguities or implementation bugs.
-
-### Session Isolation
-
-```
-Session 1: Bridge Engineer
-├── Sees: CPU32 BDM debugger-side spec
-├── Sees: existing bridge code (common/, arch/)
-├── Sees: HAL API (hal/hal.h)
-├── Sees: HIL test harness (tests/test_hil.py)
-└── CANNOT see: target_sim/
-
-Session 2: Target Simulator Engineer
-├── Sees: CPU32 BDM target-side spec (target_sim/SPEC.md)
-├── Sees: HAL API (hal/hal.h)
-├── Sees: board_config.h for target_sim
-└── CANNOT see: common/, arch/, tests/
-
-Session 3: Integration
-├── Both directories visible
-├── Wire boards together
-├── Run HIL tests
-└── Debug mismatches → spec ambiguities surface
-```
-
-### Why This Works
-
-1. **Independent implementations catch spec ambiguities** — if both engineers interpret "DSO bit 16 = 0 means ready" differently, the test fails and the ambiguity is exposed
-2. **No mock dependencies** — the target simulator runs real BDM timing on real hardware
-3. **Test harness is the arbiter** — it validates against the spec, not against either implementation
-4. **Reusable** — once the target sim exists, any bridge port (AVR, STM32, future) can be tested against it
-
-## Target Simulator Specification
-
-The target simulator implements the **CPU32 BDM slave** — what the MC68331 does when a debugger connects. See `target_sim/SPEC.md` for the complete target-side specification.
-
-Key behaviors:
-- **17-bit word receiver**: Clocks in on DSCLK rising edge, samples DSI, drives DSO
-- **Opcode decoder**: RAREG, WAREG, RSREG, WSREG, READ, WRITE, DUMP, FILL, GO, CALL, RST, NOP
-- **Register file**: D0-D7, A0-A7, SR, PC, USP, SSP, SFC, DFC, VBR, FAR, ATEMP
-- **Memory**: 64KB RAM array, byte/word/long access with address auto-increment
-- **Status generation**: READY/NOT_READY/BERR/ILLEGAL per spec
-- **BDM entry**: FREEZE assertion when BKPT sampled low at RESET rising edge
+Each Blackpill also has an FTDI adapter on PB6 (TX) / PB7 (RX) for serial debug output.
 
 ## Test Suite
 
-The HIL test suite (`tests/test_hil.py`) exercises every BDM command through the bridge:
+`tools/tests/test_hil.py` exercises every BDM command through the bridge:
 
 | Test Category | Tests | Description |
 |---------------|-------|-------------|
@@ -102,38 +53,53 @@ The HIL test suite (`tests/test_hil.py`) exercises every BDM command through the
 | Error Handling | 3 | BERR on invalid access, timeout, illegal opcode |
 | Protocol Edge Cases | 3 | Rapid commands, status polling, preamble retry |
 
-## Build Instructions
+## Build & Test
 
 ```bash
-# Build bridge firmware (Blackpill #1)
-make VARIANT=stm32f1 all
-st-flash write build/stm32f1/bdm_bridge.bin 0x08000000
+# Build both
+make
 
-# Build target simulator (Blackpill #2)
-make VARIANT=target_sim all
-st-flash write build/target_sim/bdm_target_sim.bin 0x08000000
+# Flash bridge (Blackpill #1)
+make -C bridge flash
+
+# Flash target simulator (Blackpill #2)
+make -C target_sim flash
 
 # Run HIL tests
-make VARIANT=stm32f1 test-hil PORT=/dev/ttyACM0 TARGET_PORT=/dev/ttyACM1
+uv run --directory bridge/test python -m pytest -v test_hil.py
 ```
 
-## Directory Structure
+## Directory Structure (Current)
 
 ```
 m68k-bdm/
-├── common/                  # Bridge firmware (shared)
-├── arch/                    # HAL implementations
-│   ├── avr/
-│   └── stm32f1/
+├── bridge/                  # BDM bridge firmware (DUT)
+│   ├── main.c              # Entry point (LED blink, CLI, UART)
+│   ├── cli.c/h             # Command-line interface
+│   ├── Makefile             # Build system
+│   ├── test/                # Loopback tests (via serial)
+│   └── SPEC.md              # Bridge BDM spec
 ├── target_sim/              # CPU32 BDM target simulator
-│   ├── SPEC.md              # Target-side BDM specification
-│   ├── sim_core.c/h         # BDM slave state machine
-│   ├── sim_bdm.c/h          # Low-level 17-bit word shift (slave)
-│   └── main.c               # Entry point
-├── tests/
-│   ├── test_monitor.py      # Protocol framing tests
-│   └── test_hil.py          # Hardware-in-the-loop tests
+│   ├── main.c               # Entry point (bridge-style)
+│   ├── sim_core.c/h         # BDM slave state machine + register file
+│   ├── sim_bdm.c/h          # Low-level 17-bit word shift (direct regs)
+│   ├── sim_debug.c/h        # Non-blocking UART debug logger
+│   ├── board_config.h       # Pin mapping (matches bridge)
+│   ├── Makefile             # Build system
+│   └── SPEC.md              # Target-side BDM specification
+├── common/                  # Shared platform code
+│   ├── startup.c            # CMSIS startup (vector table, Reset_Handler)
+│   ├── delay.c/h            # SysTick-based delay
+│   ├── uart.c/h             # Interrupt-driven UART (USART1, PB6/PB7)
+│   ├── syscall.c            # Newlib syscall stubs
+│   ├── ringbuf.h            # Inline ring buffer
+│   ├── stm32f411.ld         # Linker script
+│   └── bdm_defs.h           # BDM opcodes, protocol constants
+├── tools/                   # Host-side tools
+│   ├── bdm_cli.py           # Python BDM CLI
+│   └── tests/               # Legacy tests
+├── STM32CubeF4/             # CMSIS headers (third-party)
 ├── docs/
 │   └── HIL_TEST_PLAN.md     # This document
-└── Makefile                 # VARIANT=avr|stm32f1|target_sim
+└── Makefile                 # Top-level: all, clean, flash-*
 ```
