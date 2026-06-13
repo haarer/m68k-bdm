@@ -23,6 +23,8 @@ m68k-bdm/
 │   ├── startup.c           # Vector table, Reset_Handler, SystemInit (from bridge/)
 │   ├── delay.c             # Busy-wait delays (from bridge/)
 │   ├── delay.h             # (from bridge/)
+│   ├── uart.c              # USART1 on PB6/PB7, FTDI, interrupt-driven (from bridge/)
+│   ├── uart.h              # (from bridge/)
 │   ├── syscall.c           # Newlib syscall stubs (from bridge/)
 │   ├── ringbuf.h           # Inline ring buffer (from bridge/)
 │   └── stm32f411.ld        # Linker script (from bridge/)
@@ -34,7 +36,7 @@ m68k-bdm/
 │   ├── syscall.c           → remove, use common/syscall.c
 │   ├── ringbuf.h           → remove, use common/ringbuf.h
 │   ├── stm32f411.ld        → remove, use common/stm32f411.ld
-│   ├── uart.c/h            # Keep (USART1, PB6/PB7, FTDI)
+│   ├── uart.c/h            → remove, use common/uart.c/h
 │   ├── cli.c/h             # Keep (command-line interface)
 │   └── test/               # Keep (Python test suite)
 ├── target_sim/             # CPU32 target simulator (needs rewrite)
@@ -45,7 +47,7 @@ m68k-bdm/
 │   ├── syscall.c           → from common/
 │   ├── ringbuf.h           → from common/
 │   ├── stm32f411.ld        → from common/
-│   ├── uart.c/h            → from common/ (same UART as bridge, PB6/PB7 FTDI)
+│   ├── uart.c/h            → from common/
 │   ├── board_config.h      # Keep (BDM pin definitions)
 │   ├── sim_bdm.c/h         # Rewrite: replace hal_gpio_* with direct reg access
 │   ├── sim_core.c/h        # Keep as-is (pure logic)
@@ -70,6 +72,8 @@ m68k-bdm/
    - `startup.c` → `common/startup.c`
    - `delay.c` → `common/delay.c`
    - `delay.h` → `common/delay.h`
+   - `uart.c` → `common/uart.c`
+   - `uart.h` → `common/uart.h`
    - `syscall.c` → `common/syscall.c`
    - `ringbuf.h` → `common/ringbuf.h`
    - `stm32f411.ld` → `common/stm32f411.ld`
@@ -102,6 +106,7 @@ Delete:
 1. Remove from `bridge/`:
    - `startup.c`
    - `delay.c`, `delay.h`
+   - `uart.c`, `uart.h`
    - `syscall.c`
    - `ringbuf.h`
    - `stm32f411.ld`
@@ -142,7 +147,7 @@ Delete:
    - `main()`: init UART, init debug logger, init sim_core, loop: `sim_core_run()` + drain debug buffer
    - Add LED blink pattern for boot indication (like bridge does)
 
-10. **Create `target_sim/uart.c/h`** — copy from `bridge/uart.c/h` (same USART1 on PB6/PB7)
+10. **`target_sim/uart.c/h`** — from `common/`, no extra work needed
 
 ### Phase 6 — Update README
 
@@ -156,7 +161,7 @@ Update `README.md` to reflect the new structure.
 |----------|--------|-----------|
 | Ring buffer API | Bridge's inline header (`ringbuffer_put_head`, `ringbuffer_get_tail`) | Working and proven |
 | Startup code | Bridge's `startup.c` (C-based, 100 MHz PLL) | Only valid implementation |
-| UART | USART1 on PB6/PB7, FTDI adapter | Same for both bridge and target_sim |
+| UART | `common/uart.c/h` (USART1 on PB6/PB7, FTDI) | Shared by both bridge and target_sim |
 | Hardware abstraction | Direct register access (no HAL) | Bridge pattern, simpler and more transparent |
 | USB CDC | Not used | Broken; both projects use FTDI UART |
 | Build system | Make (same pattern as bridge) | Consistent across both projects |
