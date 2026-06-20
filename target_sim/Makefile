@@ -35,7 +35,7 @@ main.hex: main.elf
 	$(OBJCOPY) -O ihex --set-start 0x08000000 $< $@
 
 flash: main.hex
-	st-flash --reset --format ihex write main.hex
+	st-flash --serial E1007200D0D2139393740544  --reset --format ihex write main.hex
 
 clean:
 	rm -rf *.o *.hex *.elf *.map

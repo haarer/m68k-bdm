@@ -13,12 +13,14 @@ LDFLAGS     = -nostartfiles $(ARCH_FLAGS) $(OPT_FLAGS) $(WARN_FLAGS) -ggdb3 \
               -Wl,-gc-sections,-Map,main.map -Wl,--cref -T$(COMMON_DIR)/stm32f411.ld -lc -lgcc
 
 INCLUDES = -I $(COMMON_DIR) \
+           -I $(COMMON_DIR)/bdm_engine \
            -I ../STM32CubeF4/Drivers/CMSIS/Include \
            -I ../STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include
 
 .DEFAULT_GOAL := main.hex
 
-COMMON_OBJS = $(COMMON_DIR)/startup.o $(COMMON_DIR)/delay.o $(COMMON_DIR)/uart.o $(COMMON_DIR)/syscall.o
+COMMON_OBJS = $(COMMON_DIR)/startup.o $(COMMON_DIR)/delay.o $(COMMON_DIR)/uart.o $(COMMON_DIR)/syscall.o \
+              $(COMMON_DIR)/bdm_engine/bdm_core.o $(COMMON_DIR)/bdm_engine/bdm_timing.o
 BRIDGE_OBJS = main.o cli.o
 OBJS = $(COMMON_OBJS) $(BRIDGE_OBJS)
 
@@ -35,11 +37,12 @@ main.hex: main.elf
 	$(OBJCOPY) -O ihex --set-start 0x08000000 $< $@
 
 flash: main.hex
-	st-flash --reset --format ihex write main.hex
+	st-flash --serial 37FF71064E573436320D1B43 --reset --format ihex write main.hex
 
 # --- Build variants for ABI / float-printf comparison ---
 BUILD_DIR = build
 OBJ_FILES = $(COMMON_DIR)/startup.o $(COMMON_DIR)/delay.o $(COMMON_DIR)/uart.o $(COMMON_DIR)/syscall.o \
+            $(COMMON_DIR)/bdm_engine/bdm_core.o $(COMMON_DIR)/bdm_engine/bdm_timing.o \
             main.o cli.o
 
 ARCH_soft-nofp  := -mthumb -mcpu=cortex-m4 -mfloat-abi=soft
@@ -77,6 +80,9 @@ define variant_rule =
 build/$1/$(COMMON_DIR)/%.o: $(COMMON_DIR)/%.c | build/$1/$(COMMON_DIR)/
 	$$(CC) -c -o $$@ $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 $$(DEFS_$1) $$(INCLUDES) $$<
 
+build/$1/$(COMMON_DIR)/bdm_engine/%.o: $(COMMON_DIR)/bdm_engine/%.c | build/$1/$(COMMON_DIR)/bdm_engine/
+	$$(CC) -c -o $$@ $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 $$(DEFS_$1) $$(INCLUDES) $$<
+
 build/$1/%.o: %.c | build/$1/
 	$$(CC) -c -o $$@ $$(ARCH_$1) $$(OPT_FLAGS) $$(WARN_FLAGS) -ggdb3 $$(DEFS_$1) $$(INCLUDES) $$<
 
@@ -92,6 +98,9 @@ build/$1/:
 	mkdir -p $$@
 
 build/$1/$(COMMON_DIR)/:
+	mkdir -p $$@
+
+build/$1/$(COMMON_DIR)/bdm_engine/:
 	mkdir -p $$@
 endef
 
@@ -143,7 +152,7 @@ flash-soft-fp-stdio: build/soft-fp-stdio/main.hex
 
 clean:
 	rm -rf *.o *.hex *.elf *.map $(BUILD_DIR)
-	rm -f $(COMMON_DIR)/*.o
+	rm -f $(COMMON_DIR)/*.o $(COMMON_DIR)/bdm_engine/*.o
 
 test:
 	uv sync --directory test

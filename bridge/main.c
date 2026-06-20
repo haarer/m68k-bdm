@@ -3,6 +3,7 @@
 #include "delay.h"
 #include "uart.h"
 #include "cli.h"
+#include "bdm_core.h"
 
 #define LED_PIN 13
 
@@ -16,7 +17,9 @@ int main(void) {
     GPIOC->OSPEEDR |=  (2 << (LED_PIN * 2));
     GPIOC->PUPDR   &= ~(3 << (LED_PIN * 2));
 
-    for (int i = 0; i < 5; i++) {
+    bdm_init();
+
+    for (int i = 0; i < 3; i++) {
         GPIOC->BSRR = (1 << LED_PIN) << 16;
         delay_ms(80);
         GPIOC->BSRR = (1 << LED_PIN);
@@ -26,8 +29,8 @@ int main(void) {
     uart_init();
     NVIC_EnableIRQ(USART1_IRQn);
 
-    uart_puts("hello world\n");
-    uart_puts("stdio connected via interrupt-based UART with ring buffers\n");
+    uart_puts("BDM bridge ready\n");
+    uart_puts("Type 'help' for commands.\n");
 
     cli_init();
 
