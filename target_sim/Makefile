@@ -1,4 +1,4 @@
-PREFIX = /usr/bin/arm-none-eabi-
+PREFIX = /opt/toolchain-arm-none-eabi-current/bin/arm-none-eabi-
 CC     = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 SIZE   = $(PREFIX)size

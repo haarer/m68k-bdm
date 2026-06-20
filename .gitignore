@@ -8,6 +8,7 @@ build/
 *.bin
 *.eep
 *.lst
+*.map
 
 # Python test environment
 venv/
