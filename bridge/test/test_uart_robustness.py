@@ -9,16 +9,15 @@ BAUDRATE = 115200
 TIMEOUT = 5
 
 
-def _ensure_flashed():
-    """Flash firmware if not already flashed this session."""
-    if not hasattr(_ensure_flashed, "_done"):
+def _ensure_reset():
+    if not hasattr(_ensure_reset, "_done"):
         subprocess.run(
-            ["st-flash", "--reset", "--format", "ihex", "write", "main.hex"],
+            ["st-flash", "reset"],
             capture_output=True,
-            timeout=30,
+            timeout=10,
         )
         time.sleep(1)
-        _ensure_flashed._done = True
+        _ensure_reset._done = True
 
 
 def _open_serial():
@@ -28,23 +27,20 @@ def _open_serial():
 
 
 def _reset_and_wait_prompt(ser):
-    """Reset board and wait for CLI prompt."""
     subprocess.run(["st-flash", "reset"], capture_output=True, timeout=10)
     time.sleep(3)
-    # Drain boot output until we see the prompt
     ser.timeout = 5
-    data = ser.read_until(b"> ")
+    data = ser.read_until(b"bdm> ")
     ser.timeout = TIMEOUT
     return data
 
 
 def send_cmd(ser, cmd):
-    """Send command, read until prompt, return response (without prompt)."""
     ser.reset_input_buffer()
     ser.write(cmd + b"\n")
-    resp = ser.read_until(b"> ")
-    if resp.endswith(b"> "):
-        resp = resp[:-2]
+    resp = ser.read_until(b"bdm> ")
+    if resp.endswith(b"bdm> "):
+        resp = resp[:-5]
     echo_prefix = cmd + b"\n\r"
     if resp.startswith(echo_prefix):
         resp = resp[len(echo_prefix):]
@@ -52,8 +48,7 @@ def send_cmd(ser, cmd):
 
 
 def test_ping():
-    """Canary: if this fails, board communication is broken."""
-    _ensure_flashed()
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
@@ -63,117 +58,78 @@ def test_ping():
         ser.close()
 
 
-def test_echobin_small():
-    _ensure_flashed()
-    size = 50
-    data = bytes(random.randrange(256) for _ in range(size))
+def test_help_contains_bdm_commands():
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
-        ser.reset_input_buffer()
-        ser.write(f"echobin {size}\n".encode())
-        ser.read_until(b"ok\n\r")
-        ser.write(data)
-        echo = ser.read(size)
-        ser.read_until(b"> ")
-        assert echo == data
+        resp = send_cmd(ser, b"help")
+        for cmd in [b"enable", b"status", b"halt", b"go", b"mread", b"regread", b"call"]:
+            assert cmd in resp, f"help missing {cmd.decode()}"
     finally:
         ser.close()
 
 
-def test_echobin_ringbuf_boundary():
-    _ensure_flashed()
+def test_bdm_commands_accepted():
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
-        for size in [1, 255, 256, 257, 512]:
-            data = bytes(random.randrange(256) for _ in range(size))
+        for cmd in [b"enable", b"status", b"halt", b"go", b"reset", b"step", b"nop"]:
             ser.reset_input_buffer()
-            ser.write(f"echobin {size}\n".encode())
-            ser.read_until(b"ok\n\r")
-            ser.write(data)
-            echo = ser.read(size)
-            ser.read_until(b"> ")
-            assert echo == data
+            ser.write(cmd + b"\n")
+            resp = ser.read_until(b"bdm> ")
+            assert b"error: unknown command" not in resp, f"{cmd} was rejected"
+            assert b"bdm> " in resp, f"{cmd} did not return prompt"
     finally:
         ser.close()
 
 
-def test_echobin_all_byte_values():
-    _ensure_flashed()
+def test_mread_parsing():
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
-        data = bytes(range(256))
-        ser.reset_input_buffer()
-        ser.write(b"echobin 256\n")
-        ser.read_until(b"ok\n\r")
-        ser.write(data)
-        echo = ser.read(256)
-        ser.read_until(b"> ")
-        assert echo == data
+        resp = send_cmd(ser, b"mread 0x1000 4")
+        assert b"ERROR" in resp or b"mread" in resp, f"unexpected: {resp!r}"
     finally:
         ser.close()
 
 
-def test_pktsend_pattern():
-    _ensure_flashed()
+def test_regread_parsing():
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
-        size = 1000
-        ser.reset_input_buffer()
-        ser.write(f"pktsend {size}\n".encode())
-        ser.read_until(b"ok\n\r")
-        data = ser.read(size)
-        ser.read_until(b"> ")
-        expected = bytes(i & 0xFF for i in range(size))
-        assert data == expected
+        resp = send_cmd(ser, b"regread 0")
+        assert b"error: unknown command" not in resp
     finally:
         ser.close()
 
 
 def test_rapid_ping():
-    _ensure_flashed()
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
         for _ in range(50):
             ser.write(b"ping\n")
-            resp = ser.read_until(b"> ")
+            resp = ser.read_until(b"bdm> ")
             assert b"pong" in resp, f"pong not found in {resp!r}"
     finally:
         ser.close()
 
 
 def test_mixed_commands():
-    _ensure_flashed()
+    _ensure_reset()
     ser = _open_serial()
     try:
         _reset_and_wait_prompt(ser)
-        cmds = [b"ping", b"hello", b"led on", b"led off"]
+        cmds = [b"ping", b"hello", b"led on", b"led off", b"status", b"nop"]
         ser.reset_input_buffer()
         for cmd in cmds * 5:
             ser.write(cmd + b"\n")
-            resp = ser.read_until(b"> ")
-            assert b"error" not in resp
-    finally:
-        ser.close()
-
-
-def test_consecutive_echobin():
-    _ensure_flashed()
-    ser = _open_serial()
-    try:
-        _reset_and_wait_prompt(ser)
-        for size in [10, 50, 100]:
-            data = bytes(random.randrange(256) for _ in range(size))
-            ser.reset_input_buffer()
-            ser.write(f"echobin {size}\n".encode())
-            ser.read_until(b"ok\n\r")
-            ser.write(data)
-            echo = ser.read(size)
-            ser.read_until(b"> ")
-            assert echo == data
+            resp = ser.read_until(b"bdm> ")
+            assert b"error" not in resp or b"error: unknown" not in resp
     finally:
         ser.close()

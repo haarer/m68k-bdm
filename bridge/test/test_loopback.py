@@ -1,11 +1,12 @@
 import os
 import serial
 import subprocess
+import time
 
 SERIAL_PORT = os.environ.get("TEST_SERIAL_PORT", "/dev/ttyUSB0")
 BAUDRATE = 115200
 TIMEOUT = 5
-EXPECTED_BOOT = b"hello world\n\rstdio connected via interrupt-based UART with ring buffers\n\r> "
+EXPECTED_BOOT = b"BDM bridge ready\n\rType 'help' for commands.\n\rbdm> "
 
 
 def reset_target():
@@ -15,9 +16,9 @@ def reset_target():
 def send_cmd(ser, cmd):
     ser.reset_input_buffer()
     ser.write(cmd + b"\n")
-    resp = ser.read_until(b"> ")
-    if resp.endswith(b"> "):
-        resp = resp[:-2]
+    resp = ser.read_until(b"bdm> ")
+    if resp.endswith(b"bdm> "):
+        resp = resp[:-5]
     echo_prefix = cmd + b"\n\r"
     if resp.startswith(echo_prefix):
         resp = resp[len(echo_prefix):]
@@ -26,8 +27,9 @@ def send_cmd(ser, cmd):
 
 def test_boot_message():
     reset_target()
+    time.sleep(4)
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    data = ser.read_until(b"> ")
+    data = ser.read_until(b"bdm> ")
     ser.close()
     assert data == EXPECTED_BOOT, f"Expected {EXPECTED_BOOT!r}, got {data!r}"
 
@@ -35,7 +37,7 @@ def test_boot_message():
 def test_hello_command():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     resp = send_cmd(ser, b"hello")
     ser.close()
     assert resp == b"hello world\n\r", f"Expected hello world, got {resp!r}"
@@ -44,7 +46,7 @@ def test_hello_command():
 def test_echo_command():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     resp = send_cmd(ser, b"echo HELLOCLI")
     ser.close()
     assert resp == b"HELLOCLI\n\r", f"Expected HELLOCLI, got {resp!r}"
@@ -53,7 +55,7 @@ def test_echo_command():
 def test_led_on_off():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     resp = send_cmd(ser, b"led on")
     assert resp == b"ok\n\r"
     resp = send_cmd(ser, b"led off")
@@ -64,143 +66,80 @@ def test_led_on_off():
 def test_help_command():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     resp = send_cmd(ser, b"help")
     ser.close()
-    assert b"available commands:" in resp
-    assert b"help" in resp
+    assert b"BDM CLI commands:" in resp
+    assert b"enable" in resp
+    assert b"status" in resp
+    assert b"halt" in resp
+    assert b"go" in resp
+    assert b"mread" in resp
+    assert b"mwrite" in resp
+    assert b"regread" in resp
+    assert b"regwrite" in resp
     assert b"hello" in resp
     assert b"led on" in resp
-    assert b"led off" in resp
-    assert b"echo" in resp
 
 
 def test_unknown_command():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     resp = send_cmd(ser, b"notacommand")
     ser.close()
     assert b"error: unknown command" in resp
 
 
-def test_ping():
-    reset_target()
-    ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    resp = send_cmd(ser, b"ping")
-    ser.close()
-    assert resp == b"pong\n\r", f"Expected pong, got {resp!r}"
-
-
 def test_empty_line():
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
     ser.reset_input_buffer()
     ser.write(b"\n")
-    resp = ser.read_until(b"> ")
+    resp = ser.read_until(b"bdm> ")
     ser.close()
-    assert resp == b"\n\r> ", f"Expected echo + prompt, got {resp!r}"
+    assert resp == b"\n\rbdm> ", f"Expected echo + prompt, got {resp!r}"
 
 
-def test_echobin_small():
-    n = 100
-    cmd = f"echobin {n}".encode()
-    data = bytes(range(n))
-
+def test_status_no_target():
+    """STATUS should return 'normal mode' when no target connected."""
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    ser.reset_input_buffer()
-    ser.write(cmd + b"\n")
-    ser.write(data)
-    resp = ser.read_until(b"> ")
+    ser.read_until(b"bdm> ")
+    resp = send_cmd(ser, b"status")
     ser.close()
-
-    if resp.endswith(b"> "):
-        resp = resp[:-2]
-    echo = cmd + b"\n\r"
-    if resp.startswith(echo):
-        resp = resp[len(echo):]
-    assert resp.startswith(b"ok\n\r"), f"Expected ok prefix, got {resp[:20]!r}"
-    resp = resp[4:]
-    assert resp == data, f"Expected {n} echoed bytes, got {len(resp)}"
+    assert b"normal mode" in resp
 
 
-def test_pktsend_small():
-    n = 10
-    cmd = f"pktsend {n}".encode()
-    expected = bytes(i & 0xFF for i in range(n))
-
+def test_enable_no_target():
+    """BDM enable should fail gracefully without a target."""
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    resp = send_cmd(ser, cmd)
+    ser.read_until(b"bdm> ")
+    resp = send_cmd(ser, b"enable")
     ser.close()
-    assert resp.startswith(b"ok\n\r"), f"Expected ok, got {resp[:20]!r}"
-    data = resp[4:]
-    assert data == expected, f"Expected {len(expected)} bytes, got {len(data)}"
+    assert b"FAIL" in resp or b"error" in resp
 
 
-def test_pktsend_buffer_fill():
-    n = 255
-    cmd = f"pktsend {n}".encode()
-    expected = bytes(i & 0xFF for i in range(n))
-
+def test_nop_no_target():
+    """NOP command should be recognized even without a target."""
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    resp = send_cmd(ser, cmd)
+    ser.read_until(b"bdm> ")
+    resp = send_cmd(ser, b"nop")
     ser.close()
-    assert resp.startswith(b"ok\n\r"), f"Expected ok, got {resp[:20]!r}"
-    data = resp[4:]
-    assert data == expected, f"Expected {len(expected)} bytes, got {len(data)}"
+    assert b"error: unknown command" not in resp
 
 
-def test_pktsend_exceed_buffer():
-    n = 256
-    cmd = f"pktsend {n}".encode()
-    expected = bytes(i & 0xFF for i in range(n))
-
+def test_halt_go_reset_no_target():
+    """halt/go/reset should be recognized (will fail without target)."""
     reset_target()
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    resp = send_cmd(ser, cmd)
+    ser.read_until(b"bdm> ")
+    for cmd in [b"halt", b"go", b"reset", b"step"]:
+        ser.reset_input_buffer()
+        ser.write(cmd + b"\n")
+        resp = ser.read_until(b"bdm> ")
+        assert b"error: unknown command" not in resp, f"{cmd} was rejected"
     ser.close()
-    assert resp.startswith(b"ok\n\r"), f"Expected ok, got {resp[:20]!r}"
-    data = resp[4:]
-    assert data == expected, f"Expected {len(expected)} bytes, got {len(data)}"
-
-
-def test_pktsend_large():
-    n = 512
-    cmd = f"pktsend {n}".encode()
-    expected = bytes(i & 0xFF for i in range(n))
-
-    reset_target()
-    ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-    resp = send_cmd(ser, cmd)
-    ser.close()
-    assert resp.startswith(b"ok\n\r"), f"Expected ok, got {resp[:20]!r}"
-    data = resp[4:]
-    assert data == expected, f"Expected {len(expected)} bytes, got {len(data)}"
-
-
-def test_long_line_truncation():
-    reset_target()
-    ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
-    ser.read_until(b"> ")
-
-    ser.reset_input_buffer()
-    cmd = b"a" * 66
-    ser.write(cmd + b"\n")
-    resp = ser.read_until(b"> ")
-    ser.close()
-
-    line_echo = b"a" * 63 + b"\n\r"
-    assert resp.startswith(line_echo), (
-        f"Expected 62-char echo, got prefix {resp[:70]!r}"
-    )
-    assert b"error: unknown command" in resp

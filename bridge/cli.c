@@ -100,6 +100,7 @@ static void handle_help(void) {
     uart_puts("BDM CLI commands:\n");
     uart_puts("  help              show this message\n");
     uart_puts("  hello             print greeting\n");
+    uart_puts("  ping              UART echo test\n");
     uart_puts("  led on/off        control LED\n");
     uart_puts("  enable            BDM enable reset sequence\n");
     uart_puts("  status            query BDM mode\n");
@@ -119,6 +120,10 @@ static void handle_help(void) {
 
 static void handle_hello(void) {
     uart_puts("hello world\n");
+}
+
+static void handle_ping(void) {
+    uart_puts("pong\n");
 }
 
 static void handle_enable(void) {
@@ -260,6 +265,8 @@ void cli_process_line(const char *line) {
         handle_help();
     else if (str_eq(line, "hello"))
         handle_hello();
+    else if (str_eq(line, "ping"))
+        handle_ping();
     else if (str_eq(line, "led on")) { led_on(); uart_puts("ok\n"); }
     else if (str_eq(line, "led off")) { led_off(); uart_puts("ok\n"); }
     else if (str_has_prefix(line, "enable"))
