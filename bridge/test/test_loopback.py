@@ -26,9 +26,9 @@ def send_cmd(ser, cmd):
 
 
 def test_boot_message():
-    reset_target()
-    time.sleep(4)
     ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
+    ser.reset_input_buffer()
+    reset_target()
     data = ser.read_until(b"bdm> ")
     ser.close()
     assert data == EXPECTED_BOOT, f"Expected {EXPECTED_BOOT!r}, got {data!r}"

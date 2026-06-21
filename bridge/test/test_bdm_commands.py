@@ -27,7 +27,6 @@ def _open_serial():
 
 def _reset_and_wait_prompt(ser):
     subprocess.run(["st-flash", "reset"], capture_output=True, timeout=10)
-    time.sleep(3)
     ser.timeout = 5
     ser.read_until(b"bdm> ")
     ser.timeout = TIMEOUT

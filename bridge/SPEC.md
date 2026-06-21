@@ -87,12 +87,13 @@ Orientation: USB-C at top, SWD at bottom, components facing up.
 ## Boot Sequence & Main Loop
 
 1. **Clock init** — HSE→PLL→100 MHz with flash wait states and Scale 1 voltage
-2. **5 fast LED blinks** — PC13 toggles 5 times at 80 ms on/off (visual alive check)
-3. **UART init** — USART1 on PB6/PB7 at 115200 8N1
-4. **Print** `hello world\n`
-5. **Print** `stdio connected via interrupt-based UART with ring buffers\n`
-6. **CLI init** — line buffer cleared, prompt `> ` printed
-7. **Main loop** — polls UART every iteration for commands. No LED blink during CLI operation.
+2. **BDM init** — configure BDM pins (PA0-2, PB0-1)
+3. **3 fast LED blinks** — PC13 toggles 3 times at 80 ms on/off (visual alive check)
+4. **UART init** — USART1 on PB6/PB7 at 115200 8N1
+5. **Print** `BDM bridge ready\n`
+6. **Print** `Type 'help' for commands.\n`
+7. **CLI init** — line buffer cleared, prompt `bdm> ` printed
+8. **Main loop** — polls UART every iteration for commands. No LED blink during CLI operation.
 
 ## Software Constraints
 
@@ -165,9 +166,9 @@ Orientation: USB-C at top, SWD at bottom, components facing up.
 
 Verify the firmware outputs the expected string on the serial console:
 
-1. Open the FTDI serial port **before** resetting the MCU (the firmware sends the boot banner ~800 ms after boot (5 blinks × 160 ms + UART init), so opening after reset will miss it)
+1. Open the FTDI serial port **before** resetting the MCU (the firmware sends the boot banner ~480 ms after boot (3 blinks × 160 ms + UART init), so opening after reset will miss it)
 2. Reset the MCU via `st-flash reset`
-3. Read from the serial port and assert the output matches `hello world\n\rstdio connected via interrupt-based UART with ring buffers\n\r> `
+3. Read from the serial port and assert the output matches `BDM bridge ready\n\rType 'help' for commands.\n\rbdm> `
 
 The test suite lives in `test/` and is run via `make test`:
 
@@ -183,12 +184,24 @@ After boot the firmware accepts these commands via UART:
 |---------|----------|-------------|
 | `help` | list of commands | Show available commands |
 | `hello` | `hello world` | Print greeting |
-| `ping` | `pong` | Liveness check |
+| `ping` | `pong` | UART liveness check |
 | `led on` | `ok` | Turn PC13 LED on |
 | `led off` | `ok` | Turn PC13 LED off |
 | `echo <text>` | `<text>` | Echo back the argument |
-| `echobin <n>` | `ok` + `n` raw bytes | Echo back `n` binary bytes from host |
-| `pktsend <n>` | `ok` + `n` byte pattern | Send `n` bytes of counting pattern `(i & 0xFF)` |
+| `enable` | `BDM enable [OK/FAIL]` | BDM enable reset sequence |
+| `status` | `normal mode` / `BDM mode` | Query BDM mode |
+| `halt` | `Halt [OK/FAIL]` | Halt target |
+| `go` | `Go [OK/FAIL]` | Resume target |
+| `reset` | `Reset [OK/FAIL]` | Target reset |
+| `step` | `Step [OK/FAIL]` | Single-step target |
+| `nop` | `NOP [OK/FAIL]` | BDM no-op |
+| `mread ADDR [SIZE]` | `mread 0x... = 0x... [OK/ERROR]` | Read memory (1/2/4 bytes) |
+| `mwrite ADDR VAL` | `mwrite [OK/FAIL]` | Write memory |
+| `regread REG` | `Dn/An = 0x... [OK/ERROR]` | Read data/address register |
+| `regwrite REG VAL` | `regwrite [OK/FAIL]` | Write data/address register |
+| `sysreg SEL` | `SYSREG[0x...] = 0x... [OK/ERROR]` | Read system register |
+| `syswr SEL VAL` | `syswr [OK/FAIL]` | Write system register |
+| `call ADDR` | `call [OK/FAIL]` | Call code at address |
 | *(empty line)* | — | ignored, prompt re-printed |
 
 ### Test suite
@@ -197,16 +210,20 @@ Located in `test/` and managed with `uv`:
 
 ```
 test/
-├── conftest.py       # session-scoped flash via pytest_sessionstart hook
-├── pyproject.toml    # uv project config
-├── uv.lock           # pinned dependencies
-├── main.py           # uv init scaffold (unused)
-└── test_loopback.py  # 14 loopback test cases
+├── conftest.py               # session-scoped hardware reset via pytest_sessionstart hook
+├── pyproject.toml            # uv project config
+├── uv.lock                   # pinned dependencies
+├── main.py                   # uv init scaffold (unused)
+├── test_loopback.py          # 14 loopback/boot/CLI test cases
+├── test_bdm_commands.py      # 19 BDM command acceptance tests
+└── test_uart_robustness.py   # 7 UART robustness tests
 ```
 
-The session hook in `conftest.py` flashes the firmware once via `st-flash --reset` before any tests run. Each test then calls `st-flash reset` independently as a precondition, opening the serial port before resetting to capture the boot output.
+The session hook in `conftest.py` performs a hardware reset via `st-flash reset` before any tests run. Each test independently calls `st-flash reset` as a precondition.
 
 Tests are run via `make test` and cover the following:
+
+### Loopback tests (`test_loopback.py`)
 
 | Test | What it verifies |
 |------|-----------------|
@@ -214,16 +231,45 @@ Tests are run via `make test` and cover the following:
 | `test_hello_command` | `hello` → `hello world` |
 | `test_echo_command` | `echo <text>` → `<text>` |
 | `test_led_on_off` | `led on` / `led off` → `ok` |
-| `test_help_command` | lists all commands |
+| `test_help_command` | lists all BDM CLI commands |
 | `test_unknown_command` | garbage input → `error: unknown command` |
-| `test_ping` | `ping` → `pong` |
 | `test_empty_line` | bare `\n` → echo + prompt, no error |
-| `test_echobin_small` | `echobin 100` → 100 raw bytes echoed back |
-| `test_pktsend_small` | `pktsend 10` — small payload |
-| `test_pktsend_buffer_fill` | `pktsend 255` — exactly fills ring buffer |
-| `test_pktsend_exceed_buffer` | `pktsend 256` — one past buffer capacity |
-| `test_pktsend_large` | `pktsend 512` — wraps pattern twice, stress test |
-| `test_long_line_truncation` | 66-char line → truncated to 63 chars |
+| `test_status_no_target` | `status` → `normal mode` without target |
+| `test_enable_no_target` | `enable` fails gracefully without target |
+| `test_nop_no_target` | `nop` is recognized without target |
+| `test_halt_go_reset_no_target` | `halt/go/reset/step` recognized without target |
+
+### BDM command tests (`test_bdm_commands.py`)
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_bdm_enable` | `enable` command accepted |
+| `test_bdm_status` | `status` returns normal/BDM mode |
+| `test_bdm_halt` | `halt` command accepted |
+| `test_bdm_go` | `go` command accepted |
+| `test_bdm_reset` | `reset` command accepted |
+| `test_bdm_step` | `step` command accepted |
+| `test_bdm_nop` | `nop` command accepted |
+| `test_bdm_mread_byte/word/long` | `mread` with 1/2/4 byte sizes accepted |
+| `test_bdm_mwrite` | `mwrite` command accepted |
+| `test_bdm_regread_data/addr` | `regread` for D/A registers accepted |
+| `test_bdm_regwrite` | `regwrite` command accepted |
+| `test_bdm_sysreg` | `sysreg` command accepted |
+| `test_bdm_syswr` | `syswr` command accepted |
+| `test_bdm_call` | `call` command accepted |
+| `test_bdm_all_commands_help` | `help` lists all BDM commands |
+
+### UART robustness tests (`test_uart_robustness.py`)
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_ping` | `ping` → `pong` |
+| `test_help_contains_bdm_commands` | `help` contains key BDM commands |
+| `test_bdm_commands_accepted` | all BDM control commands accepted |
+| `test_mread_parsing` | `mread` parses address + size |
+| `test_regread_parsing` | `regread` parses register number |
+| `test_rapid_ping` | 50 rapid pings all succeed |
+| `test_mixed_commands` | 30 mixed commands succeed |
 
 Python dependency management uses `uv`. Add new packages with:
 
