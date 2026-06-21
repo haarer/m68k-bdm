@@ -280,13 +280,14 @@ make -C bridge test
 
 The test suite communicates with the bridge over the FTDI serial connection and validates every response. Without a connected CPU32 target, BDM-dependent commands return `RSP_TARGET_ERROR`, but protocol framing, command parsing, and UART loopback are verified end-to-end.
 
-### Test Cases (36 tests)
+### Test Cases (46 tests)
 
 | File | Count | Description |
 |------|-------|-------------|
 | `test_loopback.py` | 14 | Boot message, CLI commands, echo, ping, BDM control, no-target graceful handling |
 | `test_bdm_commands.py` | 19 | Full BDM command acceptance: enable, status, halt, go, reset, step, nop, mread (1/2/4), mwrite, regread (D/A), regwrite, sysreg, syswr, call, help |
 | `test_uart_robustness.py` | 7 | Ping, help verification, command parsing, rapid-fire (50), mixed sequences (30) |
+| `test_hil_roundtrip.py` | 10 | HIL roundtrip with target_sim: memory write-read (byte/word/long/sequential), register write-read (D/A), BDM enable/FREEZE, debug log capture (preamble, word shifts) |
 
 ## Interactive CLI
 
